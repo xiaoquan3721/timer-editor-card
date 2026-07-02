@@ -1,7 +1,7 @@
 /**
  * Timer Editor Card for Home Assistant
  * A custom Lovelace card for creating time-based automations with a beautiful UI
- * Version: 1.0.0
+ * Version: 1.2.1
  */
 
 class TimerEditorCard extends HTMLElement {
@@ -15,8 +15,8 @@ class TimerEditorCard extends HTMLElement {
       display_name: '',
       action: 'turn_off',
       repeat: 'once',
-      hour: 2,
-      minute: 0,
+      hour: 19,
+      minute: 30,
       automation_name: '',
       custom_text: '',
     };
@@ -109,7 +109,6 @@ class TimerEditorCard extends HTMLElement {
     header.appendChild(arrow);
     this._content.appendChild(header);
 
-    // If there are existing automations, show them
     this._renderAutomationList();
   }
 
@@ -208,8 +207,8 @@ class TimerEditorCard extends HTMLElement {
       display_name: attrs.friendly_name || '',
       action: action.service === 'homeassistant.turn_on' ? 'turn_on' : 'turn_off',
       repeat: trigger.platform === 'time' ? 'daily' : 'once',
-      hour: h || 0,
-      minute: m || 0,
+      hour: h || 19,
+      minute: m || 30,
       automation_name: attrs.friendly_name || '',
       custom_text: attrs.timer_custom_text || '',
     };
@@ -223,8 +222,8 @@ class TimerEditorCard extends HTMLElement {
       display_name: '',
       action: 'turn_off',
       repeat: 'once',
-      hour: 2,
-      minute: 0,
+      hour: 19,
+      minute: 30,
       automation_name: '',
       custom_text: '',
     };
@@ -263,7 +262,6 @@ class TimerEditorCard extends HTMLElement {
       animation: timerDialogIn 0.3s ease;
     `;
 
-    // Add animation style
     const style = document.createElement('style');
     style.textContent = `
       @keyframes timerDialogIn {
@@ -296,24 +294,18 @@ class TimerEditorCard extends HTMLElement {
     document.body.appendChild(dialog);
     this._dialog = dialog;
 
-    // Close on backdrop click
     dialog.addEventListener('click', (e) => {
       if (e.target === dialog) this._closeDialog();
     });
 
-    // Bind events
     this._bindDialogEvents(container);
-
-    // Auto-generate automation name
     this._updateAutoName();
   }
 
   _buildDialogHTML() {
     const isEdit = !!this._editingEntityId;
-    const entityOptions = this._getEntityOptions();
 
     return `
-      <!-- Header -->
       <div style="padding: 20px 24px 16px; display: flex; align-items: center; gap: 10px; border-bottom: 1px solid #f0f0f0;">
         <div style="width: 32px; height: 32px; border-radius: 8px; background: linear-gradient(135deg, #f59e0b, #f97316); display: flex; align-items: center; justify-content: center; color: white; font-size: 16px;">
           <ha-icon icon="mdi:clock-outline"></ha-icon>
@@ -327,7 +319,6 @@ class TimerEditorCard extends HTMLElement {
       </div>
 
       <div style="padding: 20px 24px;">
-        <!-- Entity Selector -->
         <div class="timer-form-group">
           <div style="display: flex; align-items: center; gap: 8px; padding: 12px 14px;
                       border: 1px solid #e0e0e0; border-radius: 12px; cursor: pointer;"
@@ -341,21 +332,18 @@ class TimerEditorCard extends HTMLElement {
           </div>
         </div>
 
-        <!-- Main Name -->
         <div class="timer-form-group">
           <div class="timer-form-label">主实体名称</div>
           <input type="text" class="timer-form-input" id="timer-display-name"
                  placeholder="输入任务名称" value="${this._escapeHtml(this._formData.display_name)}">
         </div>
 
-        <!-- Action & Repeat Row -->
         <div class="timer-row">
           <div class="timer-form-group">
             <div class="timer-form-label">执行动作</div>
             <select class="timer-form-select" id="timer-action">
               <option value="turn_off" ${this._formData.action === 'turn_off' ? 'selected' : ''}>关闭</option>
               <option value="turn_on" ${this._formData.action === 'turn_on' ? 'selected' : ''}>开启</option>
-              <option value="toggle" ${this._formData.action === 'toggle' ? 'selected' : ''}>切换</option>
             </select>
           </div>
           <div class="timer-form-group">
@@ -369,25 +357,22 @@ class TimerEditorCard extends HTMLElement {
           </div>
         </div>
 
-        <!-- Time Row -->
         <div class="timer-row">
           <div class="timer-form-group">
-            <div class="timer-form-label">小时</div>
+            <div class="timer-form-label">小时 (0-23)</div>
             <input type="number" class="timer-form-input" id="timer-hour" min="0" max="23"
                    value="${this._formData.hour}">
           </div>
           <div class="timer-form-group">
-            <div class="timer-form-label">分钟</div>
+            <div class="timer-form-label">分钟 (0-59)</div>
             <input type="number" class="timer-form-input" id="timer-minute" min="0" max="59"
                    value="${this._formData.minute}">
           </div>
         </div>
 
-        <!-- Automation Name -->
         <div class="timer-form-group">
           <div class="timer-form-label" style="display: flex; justify-content: space-between;">
             <span>自动化名称</span>
-            ${isEdit ? '' : '<span style="color: #22c55e; font-size: 12px; display: flex; align-items: center; gap: 4px;" id="timer-sync-badge" style="display:none;"><ha-icon icon="mdi:check-circle" style="font-size: 14px;"></ha-icon>已同步到 HA</span>'}
           </div>
           <div style="display: flex; gap: 8px;">
             <input type="text" class="timer-form-input" id="timer-auto-name"
@@ -397,37 +382,14 @@ class TimerEditorCard extends HTMLElement {
           </div>
         </div>
 
-        <!-- Entity ID (read-only) -->
         <div class="timer-form-group">
           <div class="timer-form-label">自动化实体ID</div>
           <input type="text" class="timer-form-input" id="timer-entity-id"
                  value="${this._editingEntityId || 'automation.' + this._generateEntityId()}"
                  readonly style="background: #f8f8f8; color: #888;">
         </div>
-
-        <!-- Custom Text -->
-        <div class="timer-form-group">
-          <div class="timer-form-label">副文本自定义内容</div>
-          <input type="text" class="timer-form-input" id="timer-custom-text"
-                 placeholder="留空自动生成" value="${this._escapeHtml(this._formData.custom_text)}">
-        </div>
-
-        <!-- Conditions (collapsible) -->
-        <div style="margin-bottom: 16px;">
-          <div style="display: flex; align-items: center; gap: 8px; padding: 10px 0;
-                      cursor: pointer; color: #666; font-size: 14px;"
-               id="timer-conditions-toggle">
-            <ha-icon icon="mdi:filter-variant" style="font-size: 18px;"></ha-icon>
-            <span style="flex: 1;">附加条件（可选）</span>
-            <ha-icon icon="mdi:chevron-down" id="timer-conditions-arrow" style="font-size: 18px; transition: transform 0.2s;"></ha-icon>
-          </div>
-          <div id="timer-conditions-panel" style="display: none; padding: 12px; background: #fafafa; border-radius: 10px;">
-            <div style="font-size: 13px; color: #888; margin-bottom: 8px;">当前版本暂不支持条件设置，可通过 HA 自动化编辑器添加</div>
-          </div>
-        </div>
       </div>
 
-      <!-- Buttons -->
       <div style="padding: 0 24px 24px; display: flex; gap: 12px;">
         <button id="timer-cancel-btn" style="
           flex: 1; padding: 12px 20px; border-radius: 12px; border: 1px solid #e0e0e0;
@@ -446,38 +408,21 @@ class TimerEditorCard extends HTMLElement {
   }
 
   _bindDialogEvents(container) {
-    // Close
     container.querySelector('#timer-close-btn')?.addEventListener('click', () => this._closeDialog());
     container.querySelector('#timer-cancel-btn')?.addEventListener('click', () => this._closeDialog());
 
-    // Conditions toggle
-    const conditionsToggle = container.querySelector('#timer-conditions-toggle');
-    const conditionsPanel = container.querySelector('#timer-conditions-panel');
-    const conditionsArrow = container.querySelector('#timer-conditions-arrow');
-    conditionsToggle?.addEventListener('click', () => {
-      const isOpen = conditionsPanel.style.display !== 'none';
-      conditionsPanel.style.display = isOpen ? 'none' : 'block';
-      conditionsArrow.style.transform = isOpen ? 'rotate(0deg)' : 'rotate(180deg)';
-    });
-
-    // Entity selector
     container.querySelector('#timer-entity-selector')?.addEventListener('click', () => {
       this._showEntityPicker();
     });
 
-    // Save
     container.querySelector('#timer-save-btn')?.addEventListener('click', () => this._saveAutomation());
-
-    // Delete
     container.querySelector('#timer-delete-btn')?.addEventListener('click', () => this._deleteAutomation());
 
-    // Auto-update name
     const displayNameInput = container.querySelector('#timer-display-name');
     const actionSelect = container.querySelector('#timer-action');
     displayNameInput?.addEventListener('input', () => this._updateAutoName());
     actionSelect?.addEventListener('change', () => this._updateAutoName());
 
-    // Update entity name display
     if (this._formData.entity_id && this._hass) {
       const state = this._hass.states[this._formData.entity_id];
       if (state) {
@@ -492,7 +437,6 @@ class TimerEditorCard extends HTMLElement {
     const entities = Object.keys(this._hass.states)
       .filter(eid => eid.startsWith('switch.') || eid.startsWith('light.') || eid.startsWith('fan.') || eid.startsWith('climate.') || eid.startsWith('input_boolean.'));
 
-    // Create entity picker overlay
     const overlay = document.createElement('div');
     overlay.style.cssText = `
       position: fixed; top: 0; left: 0; right: 0; bottom: 0;
@@ -518,13 +462,11 @@ class TimerEditorCard extends HTMLElement {
     overlay.appendChild(box);
     this._dialog.appendChild(overlay);
 
-    // Close handler
     overlay.addEventListener('click', (e) => {
       if (e.target === overlay) overlay.remove();
     });
     box.querySelector('#picker-close').addEventListener('click', () => overlay.remove());
 
-    // Build list
     const listEl = box.querySelector('#picker-list');
     entities.forEach(eid => {
       const s = this._hass.states[eid];
@@ -549,9 +491,6 @@ class TimerEditorCard extends HTMLElement {
         <div style="flex: 1; min-width: 0;">
           <div style="font-size: 15px; font-weight: 500; color: #333; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${name}</div>
           <div style="font-size: 12px; color: #999; margin-top: 2px;">${eid}</div>
-        </div>
-        <div style="width: 20px; height: 20px; border-radius: 50%; border: 2px solid #ddd; display: flex; align-items: center; justify-content: center; flex-shrink: 0;" class="picker-check">
-          <div style="width: 10px; height: 10px; border-radius: 50%; background: #f59e0b; display: none;" class="picker-dot"></div>
         </div>
       `;
 
@@ -580,7 +519,7 @@ class TimerEditorCard extends HTMLElement {
   _updateAutoName() {
     const displayName = this._dialog?.querySelector('#timer-display-name')?.value || '';
     const action = this._dialog?.querySelector('#timer-action')?.value || 'turn_off';
-    const actionText = { turn_on: '开启', turn_off: '关闭', toggle: '切换' }[action] || '执行';
+    const actionText = { turn_on: '开启', turn_off: '关闭' }[action] || '执行';
 
     if (!displayName) return;
 
@@ -603,7 +542,6 @@ class TimerEditorCard extends HTMLElement {
   }
 
   _pinyin(str) {
-    // Simple romanization for automation IDs
     const map = {
       '定': 'ding', '时': 'shi', '关': 'guan', '开': 'kai', '充': 'chong',
       '电': 'dian', '器': 'qi', '灯': 'deng', '空': 'kong', '调': 'tiao',
@@ -618,28 +556,17 @@ class TimerEditorCard extends HTMLElement {
     return result || 'timer_task_' + Date.now().toString(36).slice(-4);
   }
 
-  _getEntityOptions() {
-    if (!this._hass) return '';
-    const domains = ['switch', 'light', 'fan', 'climate', 'input_boolean'];
-    return Object.values(this._hass.states)
-      .filter(s => domains.some(d => s.entity_id.startsWith(d + '.')))
-      .map(s => `<option value="${s.entity_id}">${s.attributes?.friendly_name || s.entity_id}</option>`)
-      .join('');
-  }
-
   async _saveAutomation() {
     if (!this._hass) return;
 
     const dialog = this._dialog;
-    const entityId = this._formData.entity_id || dialog?.querySelector('#timer-entity-selector')?.dataset?.entity;
+    const entityId = this._formData.entity_id;
     const displayName = dialog?.querySelector('#timer-display-name')?.value || '';
     const action = dialog?.querySelector('#timer-action')?.value || 'turn_off';
     const repeat = dialog?.querySelector('#timer-repeat')?.value || 'once';
     const hour = parseInt(dialog?.querySelector('#timer-hour')?.value || '0');
     const minute = parseInt(dialog?.querySelector('#timer-minute')?.value || '0');
     const autoName = dialog?.querySelector('#timer-auto-name')?.value || displayName;
-    const customText = dialog?.querySelector('#timer-custom-text')?.value || '';
-    const entityIdField = dialog?.querySelector('#timer-entity-id')?.value || '';
 
     if (!entityId) {
       alert('请选择设备');
@@ -648,13 +575,11 @@ class TimerEditorCard extends HTMLElement {
 
     const timeStr = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
 
-    // Build trigger
     const trigger = {
       platform: 'time',
       at: timeStr,
     };
 
-    // Build condition for repeat
     let conditions = [];
     if (repeat === 'weekdays') {
       conditions.push({
@@ -668,16 +593,14 @@ class TimerEditorCard extends HTMLElement {
       });
     }
 
-    // Build action
     const serviceMap = {
       turn_on: 'homeassistant.turn_on',
       turn_off: 'homeassistant.turn_off',
-      toggle: 'homeassistant.toggle',
     };
 
     const automationConfig = {
       alias: autoName || displayName,
-      description: customText || `定时${action === 'turn_on' ? '开启' : '关闭'} ${displayName}`,
+      description: `定时${action === 'turn_on' ? '开启' : '关闭'} ${displayName}`,
       trigger: [trigger],
       condition: conditions.length > 0 ? conditions : [],
       action: [{
@@ -687,58 +610,134 @@ class TimerEditorCard extends HTMLElement {
       mode: 'single',
     };
 
-    // Add marker attribute
-    automationConfig.variables = { timer_editor: true };
+    // Generate YAML text for display/copy
+    const yamlText = this._toYaml(automationConfig);
 
     try {
-      if (this._editingEntityId) {
-        // Update existing
-        await this._hass.callService('automation', 'reload');
-      }
-
-      // Save via REST API
+      // Try to save via REST API using fetchWithAuth if available
       const autoId = this._editingEntityId ? this._editingEntityId.replace('automation.', '') : 'timer_' + Date.now().toString(36).slice(-6);
-      const token = this._hass.auth?.accessToken || this._hass.auth?.data?.access_token;
 
-      if (!token) {
-        throw new Error('无法获取认证令牌，请重新登录 HA');
+      let saved = false;
+
+      // Method 1: Try fetchWithAuth (HA built-in)
+      if (this._hass.fetchWithAuth) {
+        try {
+          const resp = await this._hass.fetchWithAuth(`/api/config/automation/config/${autoId}`, {
+            method: 'POST',
+            body: JSON.stringify(automationConfig),
+          });
+          if (resp.ok) {
+            saved = true;
+          }
+        } catch (e) {
+          console.log('fetchWithAuth failed:', e);
+        }
       }
 
-      const resp = await fetch(`/api/config/automation/config/${autoId}`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(automationConfig),
-      });
-
-      if (!resp.ok) {
-        const errText = await resp.text();
-        throw new Error(`API 错误 ${resp.status}: ${errText}`);
+      // Method 2: Try standard fetch with token
+      if (!saved) {
+        const token = this._hass.auth?.accessToken || this._hass.auth?.data?.access_token;
+        if (token) {
+          const resp = await fetch(`/api/config/automation/config/${autoId}`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(automationConfig),
+          });
+          if (resp.ok) {
+            saved = true;
+          } else {
+            const errText = await resp.text();
+            console.log('REST API error:', resp.status, errText);
+          }
+        }
       }
 
-      // Show synced badge
-      this._synced = true;
-      const badge = dialog?.querySelector('#timer-sync-badge');
-      if (badge) {
-        badge.style.display = 'flex';
-        setTimeout(() => {
-          this._closeDialog();
-          this._renderAutomationList();
-        }, 800);
-      } else {
-        this._closeDialog();
-        this._renderAutomationList();
+      // Method 3: Try callWS with reload service
+      if (!saved) {
+        // Generate YAML and show copy dialog as fallback
+        this._showYamlDialog(yamlText, autoName);
+        return;
       }
 
       // Reload automations
       this._hass.callService('automation', 'reload');
 
+      this._closeDialog();
+      this._renderAutomationList();
+
     } catch (err) {
       console.error('Failed to save automation:', err);
-      alert('保存失败: ' + (err.message || '请检查配置'));
+      // Show YAML fallback
+      this._showYamlDialog(yamlText, autoName);
     }
+  }
+
+  _toYaml(config) {
+    // Simple YAML generator
+    let yaml = `- id: "${Date.now().toString().slice(-8)}"\n`;
+    yaml += `  alias: "${config.alias}"\n`;
+    yaml += `  description: "${config.description}"\n`;
+    yaml += `  trigger:\n`;
+    config.trigger.forEach(t => {
+      yaml += `    - platform: ${t.platform}\n`;
+      yaml += `      at: "${t.at}"\n`;
+    });
+    yaml += `  condition: []\n`;
+    yaml += `  action:\n`;
+    config.action.forEach(a => {
+      yaml += `    - service: ${a.service}\n`;
+      yaml += `      target:\n`;
+      yaml += `        entity_id: ${a.target.entity_id}\n`;
+    });
+    yaml += `  mode: single\n`;
+    return yaml;
+  }
+
+  _showYamlDialog(yamlText, autoName) {
+    const overlay = document.createElement('div');
+    overlay.style.cssText = `
+      position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.6); z-index: 10001;
+      display: flex; align-items: center; justify-content: center;
+      padding: 16px;
+    `;
+
+    const box = document.createElement('div');
+    box.style.cssText = `
+      background: #ffffff; border-radius: 16px; width: 100%; max-width: 420px;
+      max-height: 80vh; overflow-y: auto;
+    `;
+
+    box.innerHTML = `
+      <div style="padding: 16px 20px; border-bottom: 1px solid #f0f0f0;">
+        <div style="font-size: 17px; font-weight: 600;">保存方式</div>
+        <div style="font-size: 13px; color: #888; margin-top: 4px;">API 保存失败，请手动添加以下 YAML</div>
+      </div>
+      <div style="padding: 16px;">
+        <textarea id="yaml-output" readonly style="width: 100%; height: 200px; border: 1px solid #e0e0e0; border-radius: 10px; padding: 12px; font-family: monospace; font-size: 13px; resize: none; background: #f8f8f8;">${this._escapeHtml(yamlText)}</textarea>
+        <button id="yaml-copy" style="width: 100%; margin-top: 12px; padding: 12px; border-radius: 12px; border: none; background: linear-gradient(135deg, #f59e0b, #f97316); color: #fff; font-size: 15px; font-weight: 600; cursor: pointer;">复制 YAML</button>
+        <div style="font-size: 12px; color: #888; margin-top: 12px; line-height: 1.5;">
+          复制后粘贴到 <b>automations.yaml</b> 文件中，然后重启 HA
+        </div>
+      </div>
+      <div style="padding: 0 16px 16px;">
+        <button id="yaml-close" style="width: 100%; padding: 12px; border-radius: 12px; border: 1px solid #e0e0e0; background: #fff; color: #666; font-size: 15px; cursor: pointer;">关闭</button>
+      </div>
+    `;
+
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+
+    box.querySelector('#yaml-close').addEventListener('click', () => overlay.remove());
+    box.querySelector('#yaml-copy').addEventListener('click', () => {
+      const textarea = box.querySelector('#yaml-output');
+      textarea.select();
+      document.execCommand('copy');
+      alert('YAML 已复制到剪贴板');
+    });
   }
 
   async _deleteAutomation() {
@@ -792,7 +791,7 @@ window.customCards.push({
 });
 
 console.info(
-  '%c TIMER-EDITOR-CARD %c v1.0.0 ',
+  '%c TIMER-EDITOR-CARD %c v1.2.1 ',
   'color: white; background: #f59e0b; font-weight: 700;',
   'color: #f59e0b; background: #fff; font-weight: 700;'
 );
