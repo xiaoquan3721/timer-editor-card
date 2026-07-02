@@ -573,6 +573,14 @@ class TimerEditorCard extends HTMLElement {
       return;
     }
 
+    // Show loading state on button
+    const saveBtn = dialog?.querySelector('#timer-save-btn');
+    if (saveBtn) {
+      saveBtn.textContent = '保存中...';
+      saveBtn.style.opacity = '0.7';
+      saveBtn.disabled = true;
+    }
+
     const timeStr = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
 
     const trigger = {
@@ -610,68 +618,77 @@ class TimerEditorCard extends HTMLElement {
       mode: 'single',
     };
 
-    // Generate YAML text for display/copy
     const yamlText = this._toYaml(automationConfig);
 
-    try {
-      // Try to save via REST API using fetchWithAuth if available
-      const autoId = this._editingEntityId ? this._editingEntityId.replace('automation.', '') : 'timer_' + Date.now().toString(36).slice(-6);
+    // Helper: fetch with timeout
+    const fetchWithTimeout = (url, options, timeout = 3000) => {
+      return Promise.race([
+        fetch(url, options),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), timeout))
+      ]);
+    };
 
+    try {
+      const autoId = this._editingEntityId ? this._editingEntityId.replace('automation.', '') : 'timer_' + Date.now().toString(36).slice(-6);
       let saved = false;
 
-      // Method 1: Try fetchWithAuth (HA built-in)
+      // Method 1: fetchWithAuth with timeout
       if (this._hass.fetchWithAuth) {
         try {
-          const resp = await this._hass.fetchWithAuth(`/api/config/automation/config/${autoId}`, {
-            method: 'POST',
-            body: JSON.stringify(automationConfig),
-          });
-          if (resp.ok) {
-            saved = true;
-          }
+          const resp = await fetchWithTimeout(
+            `/api/config/automation/config/${autoId}`,
+            { method: 'POST', body: JSON.stringify(automationConfig) },
+            3000
+          );
+          if (resp.ok) saved = true;
         } catch (e) {
-          console.log('fetchWithAuth failed:', e);
+          console.log('fetchWithAuth failed:', e.message);
         }
       }
 
-      // Method 2: Try standard fetch with token
+      // Method 2: standard fetch with token and timeout
       if (!saved) {
         const token = this._hass.auth?.accessToken || this._hass.auth?.data?.access_token;
         if (token) {
-          const resp = await fetch(`/api/config/automation/config/${autoId}`, {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${token}`,
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(automationConfig),
-          });
-          if (resp.ok) {
-            saved = true;
-          } else {
-            const errText = await resp.text();
-            console.log('REST API error:', resp.status, errText);
+          try {
+            const resp = await fetchWithTimeout(
+              `/api/config/automation/config/${autoId}`,
+              {
+                method: 'POST',
+                headers: {
+                  'Authorization': `Bearer ${token}`,
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(automationConfig),
+              },
+              3000
+            );
+            if (resp.ok) saved = true;
+          } catch (e) {
+            console.log('fetch failed:', e.message);
           }
         }
       }
 
-      // Method 3: Try callWS with reload service
-      if (!saved) {
-        // Generate YAML and show copy dialog as fallback
-        this._showYamlDialog(yamlText, autoName);
+      if (saved) {
+        this._hass.callService('automation', 'reload');
+        this._closeDialog();
+        this._renderAutomationList();
         return;
       }
 
-      // Reload automations
-      this._hass.callService('automation', 'reload');
-
-      this._closeDialog();
-      this._renderAutomationList();
+      // Fallback: show YAML copy dialog
+      this._showYamlDialog(yamlText, autoName);
 
     } catch (err) {
-      console.error('Failed to save automation:', err);
-      // Show YAML fallback
+      console.error('Save error:', err);
       this._showYamlDialog(yamlText, autoName);
+    } finally {
+      if (saveBtn) {
+        saveBtn.textContent = '保存';
+        saveBtn.style.opacity = '1';
+        saveBtn.disabled = false;
+      }
     }
   }
 
@@ -791,7 +808,7 @@ window.customCards.push({
 });
 
 console.info(
-  '%c TIMER-EDITOR-CARD %c v1.2.1 ',
+  '%c TIMER-EDITOR-CARD %c v1.2.2 ',
   'color: white; background: #f59e0b; font-weight: 700;',
   'color: #f59e0b; background: #fff; font-weight: 700;'
 );
