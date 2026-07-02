@@ -129,11 +129,24 @@ class TimerEditorCard extends HTMLElement {
       `;
     } else {
       automations.forEach((auto, idx) => {
+        const trigger = this._parseTrigger(auto);
+        const friendlyName = auto.attributes?.friendly_name || auto.entity_id;
+        const isActive = auto.state === 'on';
+
+        // Get target entity info
+        const actions = auto.attributes?.action || [];
+        const action = actions[0] || {};
+        const targetEntityId = action.target?.entity_id || action.entity_id || '';
+        const targetState = this._hass?.states[targetEntityId];
+        const targetName = targetState?.attributes?.friendly_name || targetEntityId;
+        const domain = targetEntityId.split('.')[0];
+        const domainIcon = { switch: 'mdi:power-socket', light: 'mdi:lightbulb-outline', fan: 'mdi:fan', climate: 'mdi:thermostat', scene: 'mdi:palette', script: 'mdi:script-text' }[domain] || 'mdi:timer-outline';
+
         const item = document.createElement('div');
         item.style.cssText = `
           display: flex;
           align-items: center;
-          padding: 12px 16px;
+          padding: 14px 16px;
           margin-bottom: 8px;
           border-radius: 12px;
           background: var(--ha-card-background, #f5f5f5);
@@ -143,25 +156,81 @@ class TimerEditorCard extends HTMLElement {
         item.addEventListener('mouseenter', () => item.style.background = 'var(--state-icon-active-color, #e8e8e8)');
         item.addEventListener('mouseleave', () => item.style.background = 'var(--ha-card-background, #f5f5f5)');
 
-        const trigger = this._parseTrigger(auto);
-        const friendlyName = auto.attributes?.friendly_name || auto.entity_id;
-        const isActive = auto.state === 'on';
-
-        item.innerHTML = `
-          <div style="width: 36px; height: 36px; border-radius: 10px; background: ${isActive ? 'linear-gradient(135deg, #22c55e, #16a34a)' : 'linear-gradient(135deg, #9ca3af, #6b7280)'}; display: flex; align-items: center; justify-content: center; color: white; margin-right: 12px; flex-shrink: 0;">
-            <ha-icon icon="mdi:timer-outline" style="font-size: 18px;"></ha-icon>
-          </div>
-          <div style="flex: 1; min-width: 0;">
-            <div style="font-size: 14px; font-weight: 500; color: var(--primary-text-color, #333); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${friendlyName}</div>
-            <div style="font-size: 12px; color: var(--secondary-text-color, #888); margin-top: 2px;">${trigger}</div>
-          </div>
-          <ha-icon icon="mdi:chevron-right" style="color: var(--secondary-text-color, #bbb); flex-shrink: 0;"></ha-icon>
+        // Left: device icon
+        const iconBox = document.createElement('div');
+        iconBox.style.cssText = `
+          width: 40px; height: 40px; border-radius: 10px;
+          background: ${isActive ? 'linear-gradient(135deg, #f59e0b, #f97316)' : 'linear-gradient(135deg, #d1d5db, #9ca3af)'};
+          display: flex; align-items: center; justify-content: center;
+          color: white; margin-right: 12px; flex-shrink: 0;
         `;
-        item.addEventListener('click', () => this._editAutomation(auto));
+        iconBox.innerHTML = `<ha-icon icon="${domainIcon}" style="font-size: 20px;"></ha-icon>`;
+
+        // Middle: task info
+        const info = document.createElement('div');
+        info.style.cssText = 'flex: 1; min-width: 0;';
+        info.innerHTML = `
+          <div style="font-size: 15px; font-weight: 600; color: var(--primary-text-color, #333); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${friendlyName}</div>
+          <div style="font-size: 12px; color: var(--secondary-text-color, #888); margin-top: 3px; line-height: 1.4;">${trigger}</div>
+        `;
+
+        // Right: toggle switch
+        const toggleWrap = document.createElement('div');
+        toggleWrap.style.cssText = 'flex-shrink: 0; margin-left: 8px;';
+
+        const toggle = document.createElement('div');
+        toggle.style.cssText = `
+          width: 48px; height: 26px; border-radius: 13px; position: relative;
+          background: ${isActive ? '#f59e0b' : '#d1d5db'};
+          cursor: pointer; transition: background 0.2s;
+        `;
+        const knob = document.createElement('div');
+        knob.style.cssText = `
+          width: 22px; height: 22px; border-radius: 50%;
+          background: white; position: absolute; top: 2px;
+          left: ${isActive ? '24px' : '2px'};
+          transition: left 0.2s; box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+        `;
+        toggle.appendChild(knob);
+
+        toggleWrap.addEventListener('click', (e) => {
+          e.stopPropagation();
+          this._toggleAutomation(auto, toggle, knob);
+        });
+
+        toggleWrap.appendChild(toggle);
+
+        item.appendChild(iconBox);
+        item.appendChild(info);
+        item.appendChild(toggleWrap);
+
+        // Click item body to edit
+        item.addEventListener('click', (e) => {
+          if (e.target === toggle || e.target === knob) return;
+          this._editAutomation(auto);
+        });
+
         list.appendChild(item);
       });
     }
     this._content.appendChild(list);
+  }
+
+  async _toggleAutomation(auto, toggleEl, knobEl) {
+    const newState = auto.state === 'on' ? 'off' : 'on';
+    try {
+      await this._hass.callService('automation', 'toggle', { entity_id: auto.entity_id });
+      // Update UI immediately
+      if (newState === 'on') {
+        toggleEl.style.background = '#f59e0b';
+        knobEl.style.left = '24px';
+      } else {
+        toggleEl.style.background = '#d1d5db';
+        knobEl.style.left = '2px';
+      }
+    } catch (err) {
+      console.error('Toggle failed:', err);
+    }
   }
 
   _getTimerAutomations() {
@@ -180,13 +249,43 @@ class TimerEditorCard extends HTMLElement {
 
   _parseTrigger(auto) {
     const triggers = auto.attributes?.trigger || [];
+    const actions = auto.attributes?.action || [];
+    const action = actions[0] || {};
+
     if (triggers.length === 0) return '手动触发';
     const t = triggers[0];
-    if (t.platform === 'time') {
-      return `每天 ${t.at || '--:--'}`;
+
+    // Get action text
+    const serviceMap = {
+      'homeassistant.turn_on': '开启',
+      'homeassistant.turn_off': '关闭',
+      'homeassistant.toggle': '切换',
+    };
+    const actionText = serviceMap[action.service] || '执行';
+
+    // Get target entity name
+    const targetEntityId = action.target?.entity_id || action.entity_id || '';
+    const targetState = this._hass?.states[targetEntityId];
+    const targetName = targetState?.attributes?.friendly_name || '';
+
+    if (t.platform === 'time' && t.at) {
+      const parts = t.at.split(':');
+      const h = parseInt(parts[0]);
+      const m = parseInt(parts[1] || 0);
+      const timeStr = `${h}点${m > 0 ? m + '分' : ''}`;
+
+      const conditions = auto.attributes?.condition || [];
+      const weekdayCond = conditions.find(c => c.condition === 'time' && c.weekday);
+      if (weekdayCond) {
+        const dayMap = { mon: '1', tue: '2', wed: '3', thu: '4', fri: '5', sat: '6', sun: '7' };
+        const days = weekdayCond.weekday.map(d => dayMap[d] || d).join('');
+        const repeatText = `周${days}`;
+        return `${repeatText}, ${timeStr}, ${actionText}${targetName ? ' ' + targetName : ''}`;
+      }
+      return `每天 ${timeStr}, ${actionText}${targetName ? ' ' + targetName : ''}`;
     }
     if (t.platform === 'time_pattern') {
-      return `每${t.hours || t.minutes || ''}小时`;
+      return `定时, ${actionText}`;
     }
     return '定时触发';
   }
@@ -815,7 +914,7 @@ window.customCards.push({
 });
 
 console.info(
-  '%c TIMER-EDITOR-CARD %c v1.2.3 ',
+  '%c TIMER-EDITOR-CARD %c v1.3.0 ',
   'color: white; background: #f59e0b; font-weight: 700;',
   'color: #f59e0b; background: #fff; font-weight: 700;'
 );
