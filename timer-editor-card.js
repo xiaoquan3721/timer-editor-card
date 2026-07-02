@@ -168,7 +168,14 @@ class TimerEditorCard extends HTMLElement {
     if (!this._hass) return [];
     return Object.values(this._hass.states)
       .filter(s => s.entity_id.startsWith('automation.'))
-      .filter(s => s.attributes?.timer_editor === true);
+      .filter(s => {
+        // Show automations tagged by timer_editor, or those with time trigger + no complex conditions
+        if (s.attributes?.timer_editor === true) return true;
+        const triggers = s.attributes?.trigger || [];
+        const hasTimeTrigger = triggers.some(t => t.platform === 'time' && t.at);
+        if (hasTimeTrigger && triggers.length === 1) return true;
+        return false;
+      });
   }
 
   _parseTrigger(auto) {
@@ -808,7 +815,7 @@ window.customCards.push({
 });
 
 console.info(
-  '%c TIMER-EDITOR-CARD %c v1.2.2 ',
+  '%c TIMER-EDITOR-CARD %c v1.2.3 ',
   'color: white; background: #f59e0b; font-weight: 700;',
   'color: #f59e0b; background: #fff; font-weight: 700;'
 );
