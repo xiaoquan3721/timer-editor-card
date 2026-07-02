@@ -696,15 +696,27 @@ class TimerEditorCard extends HTMLElement {
         await this._hass.callService('automation', 'reload');
       }
 
-      // Call config/automation/config/set via websocket
-      const msgId = Date.now();
-      const ws = this._hass.connection;
+      // Save via REST API
+      const autoId = this._editingEntityId ? this._editingEntityId.replace('automation.', '') : 'timer_' + Date.now().toString(36).slice(-6);
+      const token = this._hass.auth?.accessToken || this._hass.auth?.data?.access_token;
 
-      await ws.sendMessagePromise({
-        type: 'config/automation/config/set',
-        automation_id: this._editingEntityId ? this._editingEntityId.replace('automation.', '') : undefined,
-        config: automationConfig,
+      if (!token) {
+        throw new Error('无法获取认证令牌，请重新登录 HA');
+      }
+
+      const resp = await fetch(`/api/config/automation/config/${autoId}`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(automationConfig),
       });
+
+      if (!resp.ok) {
+        const errText = await resp.text();
+        throw new Error(`API 错误 ${resp.status}: ${errText}`);
+      }
 
       // Show synced badge
       this._synced = true;
