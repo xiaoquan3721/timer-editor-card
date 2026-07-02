@@ -133,8 +133,8 @@ class TimerEditorCard extends HTMLElement {
         const friendlyName = auto.attributes?.friendly_name || auto.entity_id;
         const isActive = auto.state === 'on';
 
-        // Get target entity info
-        const actions = auto.attributes?.action || [];
+        // Get target entity info (HA 2024+ uses 'actions', old uses 'action')
+        const actions = this._getActions(auto);
         const action = actions[0] || {};
         const targetEntityId = action.target?.entity_id || action.entity_id || '';
         const targetState = this._hass?.states[targetEntityId];
@@ -233,23 +233,38 @@ class TimerEditorCard extends HTMLElement {
     }
   }
 
+  _getTriggers(auto) {
+    // HA 2024+ uses 'triggers' (plural), older versions use 'trigger'
+    return auto.attributes?.triggers || auto.attributes?.trigger || [];
+  }
+
+  _getActions(auto) {
+    // HA 2024+ uses 'actions' (plural), older versions use 'action'
+    return auto.attributes?.actions || auto.attributes?.action || [];
+  }
+
+  _getConditions(auto) {
+    // HA 2024+ uses 'conditions' (plural), older versions use 'condition'
+    return auto.attributes?.conditions || auto.attributes?.condition || [];
+  }
+
   _getTimerAutomations() {
     if (!this._hass) return [];
     return Object.values(this._hass.states)
       .filter(s => s.entity_id.startsWith('automation.'))
       .filter(s => {
-        // Show automations tagged by timer_editor, or those with time trigger + no complex conditions
+        // Show automations tagged by timer_editor, or those with time trigger
         if (s.attributes?.timer_editor === true) return true;
-        const triggers = s.attributes?.trigger || [];
+        const triggers = this._getTriggers(s);
         const hasTimeTrigger = triggers.some(t => t.platform === 'time' && t.at);
-        if (hasTimeTrigger && triggers.length === 1) return true;
+        if (hasTimeTrigger) return true;
         return false;
       });
   }
 
   _parseTrigger(auto) {
-    const triggers = auto.attributes?.trigger || [];
-    const actions = auto.attributes?.action || [];
+    const triggers = this._getTriggers(auto);
+    const actions = this._getActions(auto);
     const action = actions[0] || {};
 
     if (triggers.length === 0) return '手动触发';
@@ -274,7 +289,7 @@ class TimerEditorCard extends HTMLElement {
       const m = parseInt(parts[1] || 0);
       const timeStr = `${h}点${m > 0 ? m + '分' : ''}`;
 
-      const conditions = auto.attributes?.condition || [];
+      const conditions = this._getConditions(auto);
       const weekdayCond = conditions.find(c => c.condition === 'time' && c.weekday);
       if (weekdayCond) {
         const dayMap = { mon: '1', tue: '2', wed: '3', thu: '4', fri: '5', sat: '6', sun: '7' };
@@ -297,9 +312,9 @@ class TimerEditorCard extends HTMLElement {
 
   _editAutomation(auto) {
     const attrs = auto.attributes || {};
-    const triggers = attrs.trigger || [];
+    const triggers = this._getTriggers(auto);
     const trigger = triggers[0] || {};
-    const actions = attrs.action || [];
+    const actions = this._getActions(auto);
     const action = actions[0] || {};
 
     let timeStr = '';
@@ -308,11 +323,30 @@ class TimerEditorCard extends HTMLElement {
     }
     const [h, m] = timeStr.split(':').map(Number);
 
+    // Check for weekday conditions
+    const conditions = this._getConditions(auto);
+    const weekdayCond = conditions.find(c => c.condition === 'time' && c.weekday);
+    let repeat = 'once';
+    if (trigger.platform === 'time') {
+      if (weekdayCond) {
+        const wd = weekdayCond.weekday;
+        if (wd.length === 5 && !wd.includes('sat') && !wd.includes('sun')) {
+          repeat = 'weekdays';
+        } else if (wd.length === 2 && wd.includes('sat') && wd.includes('sun')) {
+          repeat = 'weekends';
+        } else {
+          repeat = 'daily';
+        }
+      } else {
+        repeat = 'daily';
+      }
+    }
+
     this._formData = {
       entity_id: action.entity_id || action.target?.entity_id || '',
       display_name: attrs.friendly_name || '',
       action: action.service === 'homeassistant.turn_on' ? 'turn_on' : 'turn_off',
-      repeat: trigger.platform === 'time' ? 'daily' : 'once',
+      repeat: repeat,
       hour: h || 19,
       minute: m || 30,
       automation_name: attrs.friendly_name || '',
@@ -914,7 +948,7 @@ window.customCards.push({
 });
 
 console.info(
-  '%c TIMER-EDITOR-CARD %c v1.3.0 ',
+  '%c TIMER-EDITOR-CARD %c v1.3.1 ',
   'color: white; background: #f59e0b; font-weight: 700;',
   'color: #f59e0b; background: #fff; font-weight: 700;'
 );
