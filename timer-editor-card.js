@@ -488,21 +488,85 @@ class TimerEditorCard extends HTMLElement {
 
   _showEntityPicker() {
     if (!this._hass) return;
-    const event = new Event('hass-more-info', { bubbles: true, composed: true });
-    // Use browser prompt as simple picker, or create a custom dropdown
+
     const entities = Object.keys(this._hass.states)
       .filter(eid => eid.startsWith('switch.') || eid.startsWith('light.') || eid.startsWith('fan.') || eid.startsWith('climate.') || eid.startsWith('input_boolean.'));
 
-    const entityNames = entities.map(eid => {
+    // Create entity picker overlay
+    const overlay = document.createElement('div');
+    overlay.style.cssText = `
+      position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.6); z-index: 10000;
+      display: flex; align-items: center; justify-content: center;
+      padding: 16px; backdrop-filter: blur(4px);
+    `;
+
+    const box = document.createElement('div');
+    box.style.cssText = `
+      background: #ffffff; border-radius: 16px; width: 100%; max-width: 420px;
+      max-height: 80vh; overflow-y: auto; box-shadow: 0 20px 60px rgba(0,0,0,0.2);
+    `;
+
+    box.innerHTML = `
+      <div style="padding: 16px 20px; border-bottom: 1px solid #f0f0f0; display: flex; align-items: center; justify-content: space-between;">
+        <span style="font-size: 17px; font-weight: 600; color: #1a1a1a;">选择设备</span>
+        <span id="picker-close" style="cursor: pointer; color: #999; font-size: 20px;"><ha-icon icon="mdi:close"></ha-icon></span>
+      </div>
+      <div id="picker-list" style="padding: 8px;"></div>
+    `;
+
+    overlay.appendChild(box);
+    this._dialog.appendChild(overlay);
+
+    // Close handler
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) overlay.remove();
+    });
+    box.querySelector('#picker-close').addEventListener('click', () => overlay.remove());
+
+    // Build list
+    const listEl = box.querySelector('#picker-list');
+    entities.forEach(eid => {
       const s = this._hass.states[eid];
-      return `${eid} (${s.attributes?.friendly_name || eid})`;
+      const name = s.attributes?.friendly_name || eid;
+      const domain = eid.split('.')[0];
+      const icon = { switch: 'mdi:power-socket', light: 'mdi:lightbulb', fan: 'mdi:fan', climate: 'mdi:thermometer', input_boolean: 'mdi:toggle-switch' }[domain] || 'mdi:devices';
+      const isOn = s.state === 'on';
+
+      const item = document.createElement('div');
+      item.style.cssText = `
+        display: flex; align-items: center; padding: 12px 14px; margin-bottom: 6px;
+        border-radius: 12px; cursor: pointer; transition: background 0.15s;
+        background: ${isOn ? 'rgba(34,197,94,0.08)' : '#f8f8f8'};
+      `;
+      item.addEventListener('mouseenter', () => item.style.background = '#f0f0f0');
+      item.addEventListener('mouseleave', () => item.style.background = isOn ? 'rgba(34,197,94,0.08)' : '#f8f8f8');
+
+      item.innerHTML = `
+        <div style="width: 36px; height: 36px; border-radius: 10px; background: ${isOn ? 'linear-gradient(135deg, #22c55e, #16a34a)' : 'linear-gradient(135deg, #9ca3af, #6b7280)'}; display: flex; align-items: center; justify-content: center; color: white; margin-right: 12px; flex-shrink: 0;">
+          <ha-icon icon="${icon}" style="font-size: 18px;"></ha-icon>
+        </div>
+        <div style="flex: 1; min-width: 0;">
+          <div style="font-size: 15px; font-weight: 500; color: #333; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${name}</div>
+          <div style="font-size: 12px; color: #999; margin-top: 2px;">${eid}</div>
+        </div>
+        <div style="width: 20px; height: 20px; border-radius: 50%; border: 2px solid #ddd; display: flex; align-items: center; justify-content: center; flex-shrink: 0;" class="picker-check">
+          <div style="width: 10px; height: 10px; border-radius: 50%; background: #f59e0b; display: none;" class="picker-dot"></div>
+        </div>
+      `;
+
+      item.addEventListener('click', () => {
+        this._formData.entity_id = eid;
+        this._updateEntityDisplay(s);
+        this._updateAutoName();
+        overlay.remove();
+      });
+
+      listEl.appendChild(item);
     });
 
-    const selected = prompt('选择设备 (输入 entity_id):\n\n示例: switch.living_room_light\n\n可用设备:\n' + entityNames.slice(0, 20).join('\n'));
-    if (selected && this._hass.states[selected]) {
-      this._formData.entity_id = selected;
-      this._updateEntityDisplay(this._hass.states[selected]);
-      this._updateAutoName();
+    if (entities.length === 0) {
+      listEl.innerHTML = '<div style="text-align: center; padding: 40px; color: #999;">没有找到可控设备</div>';
     }
   }
 
