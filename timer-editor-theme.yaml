@@ -1,0 +1,101 @@
+---
+# Timer Editor Card 配套主题
+# 扩展你现有的主题，不删除原有配置
+# 使用方法：将此内容追加到现有主题文件末尾，或复制其中的变量到现有主题
+
+timer-editor-light:
+  # 继承你的默认亮色主题（请替换为你的主题名）
+  # 或者将以下变量复制到你现有主题中
+
+  # 卡片弹窗主题色
+  timer-primary: "#f59e0b"
+  timer-primary-light: "#fbbf24"
+  timer-primary-gradient: "linear-gradient(135deg, #f59e0b, #f97316)"
+  timer-success: "#22c55e"
+  timer-success-light: "#4ade80"
+  timer-danger: "#ef4444"
+
+  # 弹窗背景
+  timer-dialog-bg: "#ffffff"
+  timer-dialog-radius: "20px"
+  timer-dialog-shadow: "0 20px 60px rgba(0,0,0,0.15)"
+
+  # 输入框
+  timer-input-bg: "#ffffff"
+  timer-input-border: "#e0e0e0"
+  timer-input-border-focus: "#f59e0b"
+  timer-input-radius: "10px"
+  timer-input-shadow-focus: "0 0 0 3px rgba(245,158,11,0.12)"
+
+  # 主按钮（保存）
+  timer-btn-primary-bg: "linear-gradient(135deg, #f59e0b, #f97316)"
+  timer-btn-primary-color: "#ffffff"
+  timer-btn-primary-radius: "12px"
+  timer-btn-primary-shadow: "0 4px 12px rgba(245,158,11,0.3)"
+
+  # 次要按钮（取消）
+  timer-btn-secondary-bg: "#ffffff"
+  timer-btn-secondary-color: "#666666"
+  timer-btn-secondary-border: "#e0e0e0"
+  timer-btn-secondary-radius: "12px"
+
+  # 列表项
+  timer-item-bg: "#f5f5f5"
+  timer-item-bg-hover: "#e8e8e8"
+  timer-item-radius: "12px"
+
+  # 文本
+  timer-text-primary: "#1a1a1a"
+  timer-text-secondary: "#666666"
+  timer-text-tertiary: "#999999"
+  timer-text-muted: "#bbbbbb"
+
+  # 分割线
+  timer-divider: "#f0f0f0"
+
+  # 覆盖 HA 全局变量（可选，会影响所有卡片）
+  # 如果你只想让定时编辑器卡片生效，可以注释掉下面的覆盖
+  # ha-card-border-radius: "16px"
+  # ha-card-box-shadow: "0 2px 8px rgba(0,0,0,0.08)"
+  # primary-color: "#f59e0b"
+  # accent-color: "#f97316"
+
+timer-editor-dark:
+  # 暗色主题版本
+  timer-primary: "#f59e0b"
+  timer-primary-light: "#fbbf24"
+  timer-primary-gradient: "linear-gradient(135deg, #f59e0b, #f97316)"
+  timer-success: "#22c55e"
+  timer-success-light: "#4ade80"
+  timer-danger: "#ef4444"
+
+  timer-dialog-bg: "#2a2a2a"
+  timer-dialog-radius: "20px"
+  timer-dialog-shadow: "0 20px 60px rgba(0,0,0,0.4)"
+
+  timer-input-bg: "#3a3a3a"
+  timer-input-border: "#555555"
+  timer-input-border-focus: "#f59e0b"
+  timer-input-radius: "10px"
+  timer-input-shadow-focus: "0 0 0 3px rgba(245,158,11,0.15)"
+
+  timer-btn-primary-bg: "linear-gradient(135deg, #f59e0b, #f97316)"
+  timer-btn-primary-color: "#ffffff"
+  timer-btn-primary-radius: "12px"
+  timer-btn-primary-shadow: "0 4px 12px rgba(245,158,11,0.25)"
+
+  timer-btn-secondary-bg: "#3a3a3a"
+  timer-btn-secondary-color: "#cccccc"
+  timer-btn-secondary-border: "#555555"
+  timer-btn-secondary-radius: "12px"
+
+  timer-item-bg: "#3a3a3a"
+  timer-item-bg-hover: "#444444"
+  timer-item-radius: "12px"
+
+  timer-text-primary: "#f0f0f0"
+  timer-text-secondary: "#aaaaaa"
+  timer-text-tertiary: "#888888"
+  timer-text-muted: "#666666"
+
+  timer-divider: "#444444"
