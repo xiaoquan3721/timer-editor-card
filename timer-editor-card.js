@@ -1,1182 +1,2736 @@
 /**
  * Timer Editor Card for Home Assistant
- * A custom Lovelace card for creating time-based automations with a beautiful UI
- * Version: 1.4.0
+ * Version: 2.0.0 - 内嵌表单UI
+ * 
+ * 功能：
+ * - 创建/编辑/删除 Home Assistant 自动化定时任务
+ * - 内嵌折叠面板式配置界面（非弹窗）
+ * - 支持倒计时模式、条件模式（仅夜间/白天）、单次任务
+ * - 场景选择器（预设场景列表）
+ * - YAML 代码编辑器
+ * - 兼容 HA 2024+
  */
 
-class TimerEditorCard extends HTMLElement {
-  constructor() {
-    super();
-    this._config = {};
-    this._hass = null;
-    this._dialogOpen = false;
-    this._formData = {
-      entity_id: '',
-      display_name: '',
-      action: 'turn_off',
-      repeat: 'once',
-      hour: 19,
-      minute: 30,
-      mode: 'timer',
-      countdown_minutes: 30,
-      condition: 'none',
-      single_use: false,
-      automation_name: '',
-      custom_text: '',
-    };
-    this._synced = false;
-  }
+// ========== CSS 样式注入 ==========
+const TIMER_EDITOR_CARD_STYLE_ID = 'timer-editor-card-style-v2';
 
-  static getConfigElement() {
-    return document.createElement('timer-editor-card-editor');
-  }
+function injectCardStyles() {
+  if (document.getElementById(TIMER_EDITOR_CARD_STYLE_ID)) return;
+  const style = document.createElement('style');
+  style.id = TIMER_EDITOR_CARD_STYLE_ID;
+  style.textContent = `
+    /* 卡片容器 */
+    .timer-editor-card {
+      --tec-orange: #FF9500;
+      --tec-orange-light: #FFF3E0;
+      --tec-orange-gradient: linear-gradient(135deg, #FF9500, #FF6B00);
+      --tec-gray-border: #e0e0e0;
+      --tec-gray-light: #f5f5f5;
+      --tec-gray-text: #888;
+      --tec-gray-dark: #333;
+      --tec-white: #ffffff;
+      --tec-red: #ef4444;
+      --tec-green: #22c55e;
+      --tec-radius-card: 16px;
+      --tec-radius-input: 10px;
+      --tec-radius-btn: 12px;
+      --tec-radius-toggle: 13px;
+      --tec-font-title: 16px;
+      --tec-font-body: 14px;
+      --tec-font-small: 12px;
+      --tec-spacing: 12px;
+      --tec-padding: 16px;
 
-  static getStubConfig() {
-    return {
-      type: 'custom:timer-editor-card',
-      title: '定时编辑',
-      icon: 'mdi:clock-outline',
-      entities: [],
-    };
-  }
-
-  setConfig(config) {
-    if (!config) {
-      throw new Error('Invalid configuration');
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      background: var(--tec-white);
+      border-radius: var(--tec-radius-card);
+      padding: var(--tec-padding);
+      box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+      display: flex;
+      flex-direction: column;
+      gap: var(--tec-spacing);
+      position: relative;
+      overflow: hidden;
     }
-    this._config = {
-      title: '定时编辑',
-      icon: 'mdi:clock-outline',
-      ...config,
-    };
-  }
 
-  set hass(hass) {
-    this._hass = hass;
-    if (!this._content) {
-      this._render();
-    }
-  }
-
-  get hass() {
-    return this._hass;
-  }
-
-  _render() {
-    this.innerHTML = '';
-    this._content = document.createElement('ha-card');
-    this._content.style.borderRadius = '16px';
-    this._content.style.overflow = 'hidden';
-    this._content.style.boxShadow = '0 2px 8px rgba(0,0,0,0.08)';
-    this._content.style.background = 'var(--card-background-color, #fff)';
-    this.appendChild(this._content);
-
-    const header = document.createElement('div');
-    header.style.cssText = `
-      padding: 16px 20px;
+    /* 头部区域 */
+    .tec-header {
       display: flex;
       align-items: center;
-      gap: 12px;
-      cursor: pointer;
-      border-bottom: 1px solid var(--divider-color, rgba(0,0,0,0.06));
-    `;
-    header.addEventListener('click', () => this._openDialog());
+      justify-content: space-between;
+      padding-bottom: var(--tec-spacing);
+      border-bottom: 1px solid var(--tec-gray-border);
+    }
 
-    const iconBox = document.createElement('div');
-    iconBox.style.cssText = `
-      width: 40px;
-      height: 40px;
-      border-radius: 12px;
-      background: linear-gradient(135deg, #f59e0b, #f97316);
+    .tec-header-left {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .tec-header-icon {
+      width: 36px;
+      height: 36px;
+      border-radius: 10px;
+      background: var(--tec-orange-gradient);
       display: flex;
       align-items: center;
       justify-content: center;
       color: white;
-      font-size: 20px;
-      flex-shrink: 0;
-    `;
-    iconBox.innerHTML = `<ha-icon icon="${this._config.icon || 'mdi:clock-outline'}"></ha-icon>`;
-
-    const titleArea = document.createElement('div');
-    titleArea.style.flex = '1';
-    titleArea.innerHTML = `
-      <div style="font-size: 16px; font-weight: 600; color: var(--primary-text-color, #333);">${this._config.title || '定时编辑'}</div>
-      <div style="font-size: 13px; color: var(--secondary-text-color, #999); margin-top: 2px;">点击添加定时或倒计时任务</div>
-    `;
-
-    const arrow = document.createElement('div');
-    arrow.style.cssText = 'color: var(--secondary-text-color, #999); font-size: 20px;';
-    arrow.innerHTML = '<ha-icon icon="mdi:chevron-right"></ha-icon>';
-
-    header.appendChild(iconBox);
-    header.appendChild(titleArea);
-    header.appendChild(arrow);
-    this._content.appendChild(header);
-
-    this._renderAutomationList();
-  }
-
-  _renderAutomationList() {
-    const existingList = this._content.querySelector('.automation-list');
-    if (existingList) existingList.remove();
-
-    const list = document.createElement('div');
-    list.className = 'automation-list';
-    list.style.padding = '8px 16px 16px';
-
-    const automations = this._getTimerAutomations();
-    if (automations.length === 0) {
-      list.innerHTML = `
-        <div style="text-align: center; padding: 24px; color: var(--secondary-text-color, #999); font-size: 14px;">
-          暂无定时任务，点击上方添加
-        </div>
-      `;
-    } else {
-      automations.forEach((auto, idx) => {
-        const trigger = this._parseTrigger(auto);
-        const friendlyName = auto.attributes?.friendly_name || auto.entity_id;
-        const isActive = auto.state === 'on';
-
-        const actions = this._getActions(auto);
-        const action = actions[0] || {};
-        const targetEntityId = action.target?.entity_id || action.entity_id || '';
-        const targetState = this._hass?.states[targetEntityId];
-        const targetName = targetState?.attributes?.friendly_name || targetEntityId;
-        const domain = targetEntityId.split('.')[0];
-        const domainIcon = { switch: 'mdi:power-socket', light: 'mdi:lightbulb-outline', fan: 'mdi:fan', climate: 'mdi:thermostat', scene: 'mdi:palette', script: 'mdi:script-text', cover: 'mdi:window-shutter', input_boolean: 'mdi:toggle-switch' }[domain] || 'mdi:timer-outline';
-
-        // Check if countdown mode
-        const triggers = this._getTriggers(auto);
-        const isCountdown = triggers.length === 0;
-        const countdownBadge = isCountdown ? '<span style="margin-left: 6px; padding: 2px 8px; border-radius: 6px; background: linear-gradient(135deg, #f59e0b, #f97316); color: white; font-size: 11px; font-weight: 600;">倒计时</span>' : '';
-
-        const item = document.createElement('div');
-        item.style.cssText = `
-          display: flex;
-          align-items: center;
-          padding: 14px 16px;
-          margin-bottom: 8px;
-          border-radius: 12px;
-          background: var(--ha-card-background, #f5f5f5);
-          cursor: pointer;
-          transition: background 0.2s;
-        `;
-        item.addEventListener('mouseenter', () => item.style.background = 'var(--state-icon-active-color, #e8e8e8)');
-        item.addEventListener('mouseleave', () => item.style.background = 'var(--ha-card-background, #f5f5f5)');
-
-        const iconBox = document.createElement('div');
-        iconBox.style.cssText = `
-          width: 40px; height: 40px; border-radius: 10px;
-          background: ${isActive ? 'linear-gradient(135deg, #f59e0b, #f97316)' : 'linear-gradient(135deg, #d1d5db, #9ca3af)'};
-          display: flex; align-items: center; justify-content: center;
-          color: white; margin-right: 12px; flex-shrink: 0;
-        `;
-        iconBox.innerHTML = `<ha-icon icon="${domainIcon}" style="font-size: 20px;"></ha-icon>`;
-
-        const info = document.createElement('div');
-        info.style.cssText = 'flex: 1; min-width: 0;';
-        info.innerHTML = `
-          <div style="font-size: 15px; font-weight: 600; color: var(--primary-text-color, #333); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; align-items: center;">${friendlyName}${countdownBadge}</div>
-          <div style="font-size: 12px; color: var(--secondary-text-color, #888); margin-top: 3px; line-height: 1.4;">${trigger}</div>
-        `;
-
-        const toggleWrap = document.createElement('div');
-        toggleWrap.style.cssText = 'flex-shrink: 0; margin-left: 8px;';
-
-        const toggle = document.createElement('div');
-        toggle.style.cssText = `
-          width: 48px; height: 26px; border-radius: 13px; position: relative;
-          background: ${isActive ? '#f59e0b' : '#d1d5db'};
-          cursor: pointer; transition: background 0.2s;
-        `;
-        const knob = document.createElement('div');
-        knob.style.cssText = `
-          width: 22px; height: 22px; border-radius: 50%;
-          background: white; position: absolute; top: 2px;
-          left: ${isActive ? '24px' : '2px'};
-          transition: left 0.2s; box-shadow: 0 1px 3px rgba(0,0,0,0.15);
-        `;
-        toggle.appendChild(knob);
-
-        toggleWrap.addEventListener('click', (e) => {
-          e.stopPropagation();
-          this._toggleAutomation(auto, toggle, knob);
-        });
-
-        toggleWrap.appendChild(toggle);
-
-        item.appendChild(iconBox);
-        item.appendChild(info);
-        item.appendChild(toggleWrap);
-
-        item.addEventListener('click', (e) => {
-          if (e.target === toggle || e.target === knob) return;
-          this._editAutomation(auto);
-        });
-
-        list.appendChild(item);
-      });
-    }
-    this._content.appendChild(list);
-  }
-
-  async _toggleAutomation(auto, toggleEl, knobEl) {
-    const newState = auto.state === 'on' ? 'off' : 'on';
-    try {
-      await this._hass.callService('automation', 'toggle', { entity_id: auto.entity_id });
-      if (newState === 'on') {
-        toggleEl.style.background = '#f59e0b';
-        knobEl.style.left = '24px';
-      } else {
-        toggleEl.style.background = '#d1d5db';
-        knobEl.style.left = '2px';
-      }
-    } catch (err) {
-      console.error('Toggle failed:', err);
-    }
-  }
-
-  _getTriggers(auto) {
-    return auto.attributes?.triggers || auto.attributes?.trigger || [];
-  }
-
-  _getActions(auto) {
-    return auto.attributes?.actions || auto.attributes?.action || [];
-  }
-
-  _getConditions(auto) {
-    return auto.attributes?.conditions || auto.attributes?.condition || [];
-  }
-
-  _getTimerAutomations() {
-    if (!this._hass) return [];
-    return Object.values(this._hass.states)
-      .filter(s => s.entity_id.startsWith('automation.'))
-      .filter(s => {
-        if (s.attributes?.timer_editor === true) return true;
-        if (s.attributes?.timer_editor_card === true) return true;
-        const triggers = this._getTriggers(s);
-        const hasTimeTrigger = triggers.some(t => t.platform === 'time' && t.at);
-        if (hasTimeTrigger) return true;
-        // Countdown automations have empty triggers but timer_editor tag
-        const actions = this._getActions(s);
-        const hasDelay = actions.some(a => a.delay || (typeof a === 'object' && a.delay !== undefined));
-        if (hasDelay && triggers.length === 0) return true;
-        return false;
-      });
-  }
-
-  _parseTrigger(auto) {
-    const triggers = this._getTriggers(auto);
-    const actions = this._getActions(auto);
-    const action = actions[0] || {};
-
-    if (triggers.length === 0) {
-      const hasDelay = actions.some(a => a.delay || (typeof a === 'object' && a.delay !== undefined));
-      if (hasDelay) {
-        const delayAction = actions.find(a => a.delay || (typeof a === 'object' && a.delay !== undefined));
-        const delayText = delayAction ? this._formatDelay(delayAction.delay) : '';
-        const realAction = actions.find(a => a.service && !a.delay) || {};
-        const serviceMap = { 'homeassistant.turn_on': '开启', 'homeassistant.turn_off': '关闭', 'homeassistant.toggle': '切换' };
-        const actionText = serviceMap[realAction.service] || '执行';
-        const targetEntityId = realAction.target?.entity_id || realAction.entity_id || '';
-        const targetName = this._hass?.states[targetEntityId]?.attributes?.friendly_name || '';
-        return `倒计时 ${delayText}, ${actionText}${targetName ? ' ' + targetName : ''}`;
-      }
-      return '手动触发';
+      font-size: 18px;
     }
 
-    const t = triggers[0];
-    const serviceMap = {
-      'homeassistant.turn_on': '开启',
-      'homeassistant.turn_off': '关闭',
-      'homeassistant.toggle': '切换',
-    };
-    const actionText = serviceMap[action.service] || '执行';
-    const targetEntityId = action.target?.entity_id || action.entity_id || '';
-    const targetName = this._hass?.states[targetEntityId]?.attributes?.friendly_name || '';
-
-    if (t.platform === 'time' && t.at) {
-      const parts = t.at.split(':');
-      const h = parseInt(parts[0]);
-      const m = parseInt(parts[1] || 0);
-      const timeStr = `${h}点${m > 0 ? m + '分' : ''}`;
-
-      const conditions = this._getConditions(auto);
-      const weekdayCond = conditions.find(c => c.condition === 'time' && c.weekday);
-      if (weekdayCond) {
-        const dayMap = { mon: '1', tue: '2', wed: '3', thu: '4', fri: '5', sat: '6', sun: '7' };
-        const days = weekdayCond.weekday.map(d => dayMap[d] || d).join('');
-        const repeatText = `周${days}`;
-        return `${repeatText}, ${timeStr}, ${actionText}${targetName ? ' ' + targetName : ''}`;
-      }
-
-      const singleUse = auto.attributes?.single_use;
-      const repeatText = singleUse ? '单次' : '每天';
-      return `${repeatText} ${timeStr}, ${actionText}${targetName ? ' ' + targetName : ''}`;
-    }
-    if (t.platform === 'time_pattern') {
-      return `定时, ${actionText}`;
-    }
-    return '定时触发';
-  }
-
-  _formatDelay(delay) {
-    if (typeof delay === 'number') return `${delay}秒`;
-    if (typeof delay === 'string') {
-      const parts = delay.split(':');
-      if (parts.length === 3) {
-        const h = parseInt(parts[0]);
-        const m = parseInt(parts[1]);
-        const s = parseInt(parts[2]);
-        if (h > 0) return `${h}小时${m > 0 ? m + '分' : ''}`;
-        if (m > 0) return `${m}分钟${s > 0 ? s + '秒' : ''}`;
-        return `${s}秒`;
-      }
-      return delay;
-    }
-    return '';
-  }
-
-  _openDialog() {
-    this._resetForm();
-    this._showDialog();
-  }
-
-  _editAutomation(auto) {
-    const attrs = auto.attributes || {};
-    const triggers = this._getTriggers(auto);
-    const trigger = triggers[0] || {};
-    const actions = this._getActions(auto);
-    const action = actions[0] || {};
-
-    const isCountdown = triggers.length === 0;
-
-    let timeStr = '';
-    if (typeof trigger.at === 'string') {
-      timeStr = trigger.at;
-    }
-    const [h, m] = timeStr.split(':').map(Number);
-
-    const conditions = this._getConditions(auto);
-    const weekdayCond = conditions.find(c => c.condition === 'time' && c.weekday);
-    let repeat = 'once';
-    if (trigger.platform === 'time') {
-      if (weekdayCond) {
-        const wd = weekdayCond.weekday;
-        if (wd.length === 5 && !wd.includes('sat') && !wd.includes('sun')) {
-          repeat = 'weekdays';
-        } else if (wd.length === 2 && wd.includes('sat') && wd.includes('sun')) {
-          repeat = 'weekends';
-        } else {
-          repeat = 'daily';
-        }
-      } else {
-        repeat = 'daily';
-      }
+    .tec-header-title {
+      font-size: var(--tec-font-title);
+      font-weight: 600;
+      color: var(--tec-gray-dark);
     }
 
-    // Detect countdown mode
-    let countdownMin = 30;
-    if (isCountdown) {
-      const delayAction = actions.find(a => a.delay || (typeof a === 'object' && a.delay !== undefined));
-      if (delayAction) {
-        const delay = delayAction.delay;
-        if (typeof delay === 'string') {
-          const parts = delay.split(':');
-          if (parts.length === 3) {
-            countdownMin = parseInt(parts[0]) * 60 + parseInt(parts[1]);
-          }
-        } else if (typeof delay === 'number') {
-          countdownMin = Math.round(delay / 60);
-        }
-      }
+    .tec-header-subtitle {
+      font-size: var(--tec-font-small);
+      color: var(--tec-gray-text);
+      margin-top: 2px;
     }
 
-    // Detect condition
-    let condition = 'none';
-    const sunCond = conditions.find(c => c.condition === 'state' && c.entity_id === 'sun.sun');
-    if (sunCond) {
-      if (sunCond.state === 'below_horizon') condition = 'night';
-      if (sunCond.state === 'above_horizon') condition = 'day';
+    .tec-card-config {
+      font-size: var(--tec-font-small);
+      color: var(--tec-gray-text);
+      text-align: right;
     }
 
-    this._formData = {
-      entity_id: action.target?.entity_id || action.entity_id || '',
-      display_name: attrs.friendly_name || '',
-      action: action.service === 'homeassistant.turn_on' ? 'turn_on' : action.service === 'homeassistant.toggle' ? 'toggle' : 'turn_off',
-      repeat: repeat,
-      hour: h || 19,
-      minute: m || 30,
-      mode: isCountdown ? 'countdown' : 'timer',
-      countdown_minutes: countdownMin || 30,
-      condition: condition,
-      single_use: !!attrs.single_use,
-      automation_name: attrs.friendly_name || '',
-      custom_text: attrs.timer_custom_text || '',
-    };
-    this._editingEntityId = auto.entity_id;
-    this._showDialog();
-  }
-
-  _resetForm() {
-    this._formData = {
-      entity_id: this._config.default_entity || '',
-      display_name: '',
-      action: 'turn_off',
-      repeat: 'once',
-      hour: 19,
-      minute: 30,
-      mode: 'timer',
-      countdown_minutes: 30,
-      condition: 'none',
-      single_use: false,
-      automation_name: '',
-      custom_text: '',
-    };
-    this._editingEntityId = null;
-    this._synced = false;
-  }
-
-  _showDialog() {
-    if (this._dialog) {
-      this._dialog.remove();
+    /* 折叠面板 */
+    .tec-section {
+      border: 1px solid var(--tec-gray-border);
+      border-radius: var(--tec-radius-input);
+      overflow: hidden;
     }
 
-    const dialog = document.createElement('div');
-    dialog.className = 'timer-editor-overlay';
-    dialog.style.cssText = `
-      position: fixed;
-      top: 0; left: 0; right: 0; bottom: 0;
-      background: rgba(0,0,0,0.5);
-      z-index: 9999;
+    .tec-section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 14px;
+      background: var(--tec-white);
+      cursor: pointer;
+      user-select: none;
+      transition: background 0.2s;
+    }
+
+    .tec-section-header:hover {
+      background: var(--tec-gray-light);
+    }
+
+    .tec-section-header-left {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .tec-section-icon {
+      width: 24px;
+      height: 24px;
+      border-radius: 6px;
+      background: var(--tec-orange-gradient);
       display: flex;
       align-items: center;
       justify-content: center;
-      padding: 16px;
-      backdrop-filter: blur(4px);
-    `;
+      color: white;
+      font-size: 12px;
+      flex-shrink: 0;
+    }
 
-    const container = document.createElement('div');
-    container.style.cssText = `
-      background: #ffffff;
-      border-radius: 20px;
+    .tec-section-title {
+      font-size: var(--tec-font-body);
+      font-weight: 600;
+      color: var(--tec-gray-dark);
+    }
+
+    .tec-section-badge {
+      font-size: var(--tec-font-small);
+      color: var(--tec-gray-text);
+      background: var(--tec-gray-light);
+      padding: 2px 8px;
+      border-radius: 10px;
+    }
+
+    .tec-section-arrow {
+      width: 20px;
+      height: 20px;
+      transition: transform 0.3s ease;
+      color: var(--tec-gray-text);
+      flex-shrink: 0;
+    }
+
+    .tec-section-arrow.open {
+      transform: rotate(90deg);
+    }
+
+    .tec-section-body {
+      max-height: 0;
+      overflow: hidden;
+      transition: max-height 0.35s ease, padding 0.35s ease;
+      padding: 0 14px;
+      background: var(--tec-gray-light);
+    }
+
+    .tec-section-body.open {
+      max-height: 2000px;
+      padding: 14px;
+    }
+
+    /* Toggle 开关 */
+    .tec-toggle-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 0;
+    }
+
+    .tec-toggle-label {
+      font-size: var(--tec-font-body);
+      color: var(--tec-gray-dark);
+    }
+
+    .tec-toggle {
+      position: relative;
+      width: 48px;
+      height: 26px;
+      background: #d1d5db;
+      border-radius: var(--tec-radius-toggle);
+      cursor: pointer;
+      transition: background 0.3s;
+      flex-shrink: 0;
+    }
+
+    .tec-toggle.active {
+      background: #f59e0b;
+    }
+
+    .tec-toggle-knob {
+      position: absolute;
+      top: 3px;
+      left: 3px;
+      width: 20px;
+      height: 20px;
+      background: white;
+      border-radius: 50%;
+      transition: transform 0.3s;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+    }
+
+    .tec-toggle.active .tec-toggle-knob {
+      transform: translateX(22px);
+    }
+
+    /* 表单输入 */
+    .tec-form-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: var(--tec-spacing);
+      margin-top: var(--tec-spacing);
+    }
+
+    .tec-form-grid .tec-form-group.full-width {
+      grid-column: 1 / -1;
+    }
+
+    .tec-form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .tec-form-label {
+      font-size: var(--tec-font-small);
+      font-weight: 600;
+      color: var(--tec-gray-text);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .tec-form-input,
+    .tec-form-select {
       width: 100%;
-      max-width: 460px;
-      max-height: 90vh;
-      overflow-y: auto;
-      box-shadow: 0 20px 60px rgba(0,0,0,0.15);
-      animation: timerDialogIn 0.3s ease;
-    `;
+      padding: 10px 12px;
+      border: 1px solid var(--tec-gray-border);
+      border-radius: var(--tec-radius-input);
+      font-size: var(--tec-font-body);
+      color: var(--tec-gray-dark);
+      background: var(--tec-white);
+      outline: none;
+      transition: border-color 0.2s, box-shadow 0.2s;
+      box-sizing: border-box;
+      -webkit-appearance: none;
+    }
 
-    const style = document.createElement('style');
-    style.textContent = `
-      @keyframes timerDialogIn {
-        from { opacity: 0; transform: translateY(20px) scale(0.96); }
-        to { opacity: 1; transform: translateY(0) scale(1); }
-      }
-      .timer-form-group { margin-bottom: 16px; }
-      .timer-form-label {
-        font-size: 13px; color: #666; margin-bottom: 6px;
-        display: flex; align-items: center; gap: 4px;
-      }
-      .timer-form-input, .timer-form-select {
-        width: 100%; padding: 10px 14px;
-        border: 1px solid #e0e0e0; border-radius: 10px;
-        font-size: 15px; background: #fff; color: #333;
-        box-sizing: border-box; outline: none;
-        transition: border-color 0.2s, box-shadow 0.2s;
-      }
-      .timer-form-input:focus, .timer-form-select:focus {
-        border-color: #f59e0b;
-        box-shadow: 0 0 0 3px rgba(245,158,11,0.12);
-      }
-      .timer-row { display: flex; gap: 12px; }
-      .timer-row > * { flex: 1; }
-      .timer-mode-tab {
-        flex: 1; text-align: center; padding: 10px;
-        border-radius: 10px; cursor: pointer; font-size: 14px; font-weight: 500;
-        transition: all 0.2s;
-      }
-      .timer-mode-tab.active {
-        background: linear-gradient(135deg, #f59e0b, #f97316);
-        color: white;
-      }
-      .timer-mode-tab:not(.active) {
-        background: #f5f5f5; color: #666;
-      }
-    `;
-    document.head.appendChild(style);
+    .tec-form-input:focus,
+    .tec-form-select:focus {
+      border-color: var(--tec-orange);
+      box-shadow: 0 0 0 3px rgba(255, 149, 0, 0.15);
+    }
 
-    container.innerHTML = this._buildDialogHTML();
-    dialog.appendChild(container);
-    document.body.appendChild(dialog);
-    this._dialog = dialog;
+    .tec-form-input::placeholder {
+      color: #bbb;
+    }
 
-    dialog.addEventListener('click', (e) => {
-      if (e.target === dialog) this._closeDialog();
-    });
+    .tec-form-input.error {
+      border-color: var(--tec-red);
+    }
 
-    this._bindDialogEvents(container);
-    this._updateAutoName();
-    this._updateModeUI(container);
+    .tec-form-error {
+      font-size: var(--tec-font-small);
+      color: var(--tec-red);
+      display: none;
+    }
+
+    .tec-form-error.visible {
+      display: block;
+    }
+
+    /* 场景选择器 */
+    .tec-scene-picker {
+      position: relative;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .tec-scene-picker select {
+      flex: 1;
+    }
+
+    .tec-scene-clear {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      border: 1px solid var(--tec-gray-border);
+      background: var(--tec-white);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      color: var(--tec-gray-text);
+      font-size: 16px;
+      flex-shrink: 0;
+      transition: all 0.2s;
+    }
+
+    .tec-scene-clear:hover {
+      border-color: var(--tec-red);
+      color: var(--tec-red);
+      background: #FEF2F2;
+    }
+
+    /* 自动化操作按钮行 */
+    .tec-automation-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: var(--tec-spacing);
+    }
+
+    .tec-btn {
+      padding: 10px 20px;
+      border: none;
+      border-radius: var(--tec-radius-btn);
+      font-size: var(--tec-font-body);
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .tec-btn-primary {
+      background: var(--tec-orange-gradient);
+      color: white;
+      flex: 1;
+      justify-content: center;
+    }
+
+    .tec-btn-primary:hover {
+      opacity: 0.9;
+      transform: translateY(-1px);
+      box-shadow: 0 4px 12px rgba(255, 149, 0, 0.3);
+    }
+
+    .tec-btn-primary:active {
+      transform: translateY(0);
+    }
+
+    .tec-btn-delete {
+      width: 40px;
+      height: 40px;
+      border-radius: var(--tec-radius-btn);
+      border: 1px solid var(--tec-gray-border);
+      background: var(--tec-white);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      color: var(--tec-gray-text);
+      font-size: 18px;
+      flex-shrink: 0;
+      transition: all 0.2s;
+    }
+
+    .tec-btn-delete:hover {
+      border-color: var(--tec-red);
+      color: var(--tec-red);
+      background: #FEF2F2;
+    }
+
+    .tec-btn-update {
+      background: var(--tec-orange-gradient);
+      color: white;
+    }
+
+    /* 同步状态 */
+    .tec-sync-status {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: var(--tec-font-small);
+      color: var(--tec-gray-text);
+      margin-top: 8px;
+    }
+
+    .tec-sync-status.synced {
+      color: var(--tec-green);
+    }
+
+    .tec-sync-status.pending {
+      color: var(--tec-orange);
+    }
+
+    .tec-entity-id {
+      font-family: 'Courier New', monospace;
+      font-size: 11px;
+      color: var(--tec-gray-text);
+      word-break: break-all;
+      margin-top: 4px;
+    }
+
+    /* 自动化列表 */
+    .tec-automation-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .tec-automation-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 12px;
+      background: var(--tec-white);
+      border: 1px solid var(--tec-gray-border);
+      border-radius: var(--tec-radius-input);
+      transition: all 0.2s;
+    }
+
+    .tec-automation-item:hover {
+      border-color: var(--tec-orange);
+      box-shadow: 0 1px 4px rgba(255, 149, 0, 0.1);
+    }
+
+    .tec-automation-item-toggle {
+      flex-shrink: 0;
+    }
+
+    .tec-automation-item-info {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .tec-automation-item-name {
+      font-size: var(--tec-font-body);
+      font-weight: 600;
+      color: var(--tec-gray-dark);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .tec-automation-item-desc {
+      font-size: var(--tec-font-small);
+      color: var(--tec-gray-text);
+      margin-top: 2px;
+    }
+
+    .tec-automation-item-time {
+      font-size: var(--tec-font-small);
+      color: var(--tec-orange);
+      font-weight: 600;
+      flex-shrink: 0;
+    }
+
+    .tec-automation-item-edit {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      border: 1px solid var(--tec-gray-border);
+      background: var(--tec-white);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      color: var(--tec-gray-text);
+      font-size: 14px;
+      flex-shrink: 0;
+      transition: all 0.2s;
+    }
+
+    .tec-automation-item-edit:hover {
+      border-color: var(--tec-orange);
+      color: var(--tec-orange);
+    }
+
+    .tec-automation-item-delete {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      border: 1px solid var(--tec-gray-border);
+      background: var(--tec-white);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      color: var(--tec-gray-text);
+      font-size: 14px;
+      flex-shrink: 0;
+      transition: all 0.2s;
+    }
+
+    .tec-automation-item-delete:hover {
+      border-color: var(--tec-red);
+      color: var(--tec-red);
+    }
+
+    /* 底部操作栏 */
+    .tec-bottom-bar {
+      position: sticky;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: var(--tec-white);
+      border-top: 1px solid var(--tec-gray-border);
+      padding: 12px 0 0;
+      margin-top: auto;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .tec-bottom-code {
+      font-size: var(--tec-font-small);
+      color: var(--tec-orange);
+      cursor: pointer;
+      padding: 8px 0;
+      font-weight: 600;
+      white-space: nowrap;
+      transition: opacity 0.2s;
+    }
+
+    .tec-bottom-code:hover {
+      opacity: 0.8;
+    }
+
+    .tec-bottom-spacer {
+      flex: 1;
+    }
+
+    .tec-bottom-cancel {
+      padding: 10px 20px;
+      border: 1px solid var(--tec-gray-border);
+      border-radius: var(--tec-radius-btn);
+      font-size: var(--tec-font-body);
+      color: var(--tec-gray-text);
+      background: var(--tec-white);
+      cursor: pointer;
+      font-weight: 600;
+      transition: all 0.2s;
+    }
+
+    .tec-bottom-cancel:hover {
+      border-color: #999;
+      color: #666;
+    }
+
+    .tec-bottom-save {
+      padding: 10px 24px;
+      border: none;
+      border-radius: var(--tec-radius-btn);
+      font-size: var(--tec-font-body);
+      font-weight: 600;
+      background: var(--tec-orange-gradient);
+      color: white;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .tec-bottom-save:hover {
+      opacity: 0.9;
+      box-shadow: 0 4px 12px rgba(255, 149, 0, 0.3);
+    }
+
+    /* 代码编辑器区域 */
+    .tec-code-editor {
+      border: 1px solid var(--tec-gray-border);
+      border-radius: var(--tec-radius-input);
+      overflow: hidden;
+      margin-top: var(--tec-spacing);
+    }
+
+    .tec-code-editor-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 12px;
+      background: #1e1e1e;
+      color: #d4d4d4;
+      font-size: var(--tec-font-small);
+    }
+
+    .tec-code-editor-close {
+      cursor: pointer;
+      color: #888;
+      font-size: 16px;
+      transition: color 0.2s;
+    }
+
+    .tec-code-editor-close:hover {
+      color: white;
+    }
+
+    .tec-code-editor textarea {
+      width: 100%;
+      min-height: 200px;
+      padding: 12px;
+      background: #1e1e1e;
+      color: #d4d4d4;
+      border: none;
+      font-family: 'Courier New', 'Consolas', monospace;
+      font-size: 13px;
+      line-height: 1.5;
+      resize: vertical;
+      outline: none;
+      box-sizing: border-box;
+    }
+
+    /* 空状态 */
+    .tec-empty {
+      text-align: center;
+      padding: 24px;
+      color: var(--tec-gray-text);
+    }
+
+    .tec-empty-icon {
+      font-size: 32px;
+      margin-bottom: 8px;
+      opacity: 0.5;
+    }
+
+    .tec-empty-text {
+      font-size: var(--tec-font-body);
+    }
+
+    .tec-empty-sub {
+      font-size: var(--tec-font-small);
+      margin-top: 4px;
+    }
+
+    /* 加载状态 */
+    .tec-loading {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      color: var(--tec-gray-text);
+    }
+
+    .tec-spinner {
+      width: 24px;
+      height: 24px;
+      border: 3px solid var(--tec-gray-border);
+      border-top-color: var(--tec-orange);
+      border-radius: 50%;
+      animation: tec-spin 0.8s linear infinite;
+      margin-right: 10px;
+    }
+
+    @keyframes tec-spin {
+      to { transform: rotate(360deg); }
+    }
+
+    /* Toast 提示 */
+    .tec-toast {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      padding: 12px 20px;
+      border-radius: var(--tec-radius-input);
+      font-size: var(--tec-font-body);
+      color: white;
+      z-index: 10000;
+      animation: tec-toast-in 0.3s ease, tec-toast-out 0.3s ease 2.7s;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+    }
+
+    .tec-toast.success {
+      background: var(--tec-green);
+    }
+
+    .tec-toast.error {
+      background: var(--tec-red);
+    }
+
+    .tec-toast.info {
+      background: var(--tec-orange);
+    }
+
+    @keyframes tec-toast-in {
+      from { opacity: 0; transform: translateY(-20px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    @keyframes tec-toast-out {
+      from { opacity: 1; }
+      to { opacity: 0; }
+    }
+
+    /* 条件选项标签 */
+    .tec-condition-tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 6px;
+    }
+
+    .tec-condition-tag {
+      padding: 4px 10px;
+      border-radius: 14px;
+      font-size: var(--tec-font-small);
+      border: 1px solid var(--tec-gray-border);
+      background: var(--tec-white);
+      cursor: pointer;
+      color: var(--tec-gray-text);
+      transition: all 0.2s;
+    }
+
+    .tec-condition-tag.selected {
+      border-color: var(--tec-orange);
+      background: var(--tec-orange-light);
+      color: var(--tec-orange);
+    }
+
+    /* 倒计时特殊样式 */
+    .tec-countdown-fields {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .tec-countdown-fields .tec-form-input {
+      width: 60px;
+      text-align: center;
+    }
+
+    .tec-countdown-unit {
+      font-size: var(--tec-font-small);
+      color: var(--tec-gray-text);
+    }
+
+    /* ha-entity-picker 容器 */
+    .tec-entity-picker-wrap {
+      width: 100%;
+    }
+
+    .tec-entity-picker-wrap ha-entity-picker {
+      width: 100%;
+    }
+  `;
+  document.head.appendChild(style);
+}
+
+/**
+ * Timer Editor Card 类
+ * Home Assistant 自定义 Lovelace 卡片
+ */
+class TimerEditorCard extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: 'open' });
+    this._hass = null;
+    this._config = {};
+    this._automations = [];
+    this._formData = this._getDefaultFormData();
+    this._editingId = null;
+    this._sectionsOpen = {
+      subEntity: false,
+      icon: false,
+      features: false,
+      timer: true  // 默认展开定时区域
+    };
+    this._codeEditorVisible = false;
+    this._loading = false;
+    this._subEntities = [];
+    this._initialized = false;
   }
 
-  _buildDialogHTML() {
-    const isEdit = !!this._editingEntityId;
-    const isTimer = this._formData.mode === 'timer';
-
-    return `
-      <div style="padding: 20px 24px 16px; display: flex; align-items: center; gap: 10px; border-bottom: 1px solid #f0f0f0;">
-        <div style="width: 32px; height: 32px; border-radius: 8px; background: linear-gradient(135deg, #f59e0b, #f97316); display: flex; align-items: center; justify-content: center; color: white; font-size: 16px;">
-          <ha-icon icon="mdi:clock-outline"></ha-icon>
-        </div>
-        <div style="flex: 1; font-size: 17px; font-weight: 600; color: #1a1a1a;">
-          ${isEdit ? '编辑任务' : '添加任务'}
-        </div>
-        <div style="cursor: pointer; color: #999; padding: 4px; border-radius: 8px;" id="timer-close-btn">
-          <ha-icon icon="mdi:close" style="font-size: 20px;"></ha-icon>
-        </div>
-      </div>
-
-      <div style="padding: 20px 24px;">
-        ${!isEdit ? `
-        <div class="timer-form-group">
-          <div class="timer-row" style="margin-bottom: 4px;">
-            <div class="timer-mode-tab ${isTimer ? 'active' : ''}" data-mode="timer" id="timer-mode-timer">
-              <ha-icon icon="mdi:alarm" style="font-size: 16px; vertical-align: middle; margin-right: 4px;"></ha-icon>定时
-            </div>
-            <div class="timer-mode-tab ${!isTimer ? 'active' : ''}" data-mode="countdown" id="timer-mode-countdown">
-              <ha-icon icon="mdi:timer-outline" style="font-size: 16px; vertical-align: middle; margin-right: 4px;"></ha-icon>倒计时
-            </div>
-          </div>
-        </div>
-        ` : ''}
-
-        <div class="timer-form-group">
-          <div class="timer-form-label">选择设备</div>
-          <div id="timer-entity-picker-wrap" style="width: 100%;"></div>
-        </div>
-
-        <div class="timer-form-group">
-          <div class="timer-form-label">任务名称</div>
-          <input type="text" class="timer-form-input" id="timer-display-name"
-                 placeholder="输入任务名称" value="${this._escapeHtml(this._formData.display_name)}">
-        </div>
-
-        <div class="timer-row">
-          <div class="timer-form-group">
-            <div class="timer-form-label">执行动作</div>
-            <select class="timer-form-select" id="timer-action">
-              <option value="turn_off" ${this._formData.action === 'turn_off' ? 'selected' : ''}>关闭</option>
-              <option value="turn_on" ${this._formData.action === 'turn_on' ? 'selected' : ''}>开启</option>
-              <option value="toggle" ${this._formData.action === 'toggle' ? 'selected' : ''}>切换</option>
-            </select>
-          </div>
-          <div class="timer-form-group">
-            <div class="timer-form-label">执行条件</div>
-            <select class="timer-form-select" id="timer-condition">
-              <option value="none" ${this._formData.condition === 'none' ? 'selected' : ''}>无条件</option>
-              <option value="night" ${this._formData.condition === 'night' ? 'selected' : ''}>仅夜间</option>
-              <option value="day" ${this._formData.condition === 'day' ? 'selected' : ''}>仅白天</option>
-            </select>
-          </div>
-        </div>
-
-        <div id="timer-timer-section" style="${isTimer ? '' : 'display: none;'}">
-          <div class="timer-row">
-            <div class="timer-form-group">
-              <div class="timer-form-label">重复周期</div>
-              <select class="timer-form-select" id="timer-repeat">
-                <option value="once" ${this._formData.repeat === 'once' ? 'selected' : ''}>单次</option>
-                <option value="daily" ${this._formData.repeat === 'daily' ? 'selected' : ''}>每天</option>
-                <option value="weekdays" ${this._formData.repeat === 'weekdays' ? 'selected' : ''}>工作日</option>
-                <option value="weekends" ${this._formData.repeat === 'weekends' ? 'selected' : ''}>周末</option>
-              </select>
-            </div>
-            <div class="timer-form-group" style="display: flex; align-items: center; padding-top: 24px;">
-              <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 14px; color: #555;">
-                <input type="checkbox" id="timer-single-use" ${this._formData.single_use ? 'checked' : ''}>
-                执行后自动停用
-              </label>
-            </div>
-          </div>
-
-          <div class="timer-row">
-            <div class="timer-form-group">
-              <div class="timer-form-label">小时 (0-23)</div>
-              <input type="number" class="timer-form-input" id="timer-hour" min="0" max="23"
-                     value="${this._formData.hour}">
-            </div>
-            <div class="timer-form-group">
-              <div class="timer-form-label">分钟 (0-59)</div>
-              <input type="number" class="timer-form-input" id="timer-minute" min="0" max="59"
-                     value="${this._formData.minute}">
-            </div>
-          </div>
-        </div>
-
-        <div id="timer-countdown-section" style="${!isTimer ? '' : 'display: none;'}">
-          <div class="timer-form-group">
-            <div class="timer-form-label">延迟时间（分钟）</div>
-            <input type="number" class="timer-form-input" id="timer-countdown-minutes" min="1" max="1440"
-                   value="${this._formData.countdown_minutes}">
-          </div>
-          <div style="font-size: 12px; color: #888; margin-top: -10px; margin-bottom: 12px;">
-            保存后立即启动倒计时，时间到后自动执行动作
-          </div>
-        </div>
-
-        <div class="timer-form-group">
-          <div class="timer-form-label" style="display: flex; justify-content: space-between;">
-            <span>自动化名称</span>
-          </div>
-          <div style="display: flex; gap: 8px;">
-            <input type="text" class="timer-form-input" id="timer-auto-name"
-                   placeholder="留空自动生成" value="${this._escapeHtml(this._formData.automation_name)}"
-                   style="flex: 1;">
-            ${isEdit ? '<div style="width: 40px; display: flex; align-items: center; justify-content: center; cursor: pointer; color: #ef4444;" id="timer-delete-btn"><ha-icon icon="mdi:delete-outline"></ha-icon></div>' : ''}
-          </div>
-        </div>
-
-        <div class="timer-form-group">
-          <div class="timer-form-label">自动化实体ID</div>
-          <input type="text" class="timer-form-input" id="timer-entity-id"
-                 value="${this._editingEntityId || 'automation.' + this._generateEntityId()}"
-                 readonly style="background: #f8f8f8; color: #888;">
-        </div>
-      </div>
-
-      <div style="padding: 0 24px 24px; display: flex; gap: 12px;">
-        <button id="timer-cancel-btn" style="
-          flex: 1; padding: 12px 20px; border-radius: 12px; border: 1px solid #e0e0e0;
-          background: #fff; color: #666; font-size: 15px; font-weight: 500;
-          cursor: pointer; transition: all 0.2s;
-        ">取消</button>
-        <button id="timer-save-btn" style="
-          flex: 1; padding: 12px 20px; border-radius: 12px; border: none;
-          background: linear-gradient(135deg, #f59e0b, #f97316);
-          color: #fff; font-size: 15px; font-weight: 600;
-          cursor: pointer; transition: all 0.2s;
-          box-shadow: 0 4px 12px rgba(245,158,11,0.3);
-        ">${isTimer ? '保存定时' : '启动倒计时'}</button>
-      </div>
-    `;
+  /**
+   * 获取配置元素（编辑器侧边栏配置）
+   */
+  static getConfigElement() {
+    return document.createElement('timer-editor-card-editor');
   }
 
-  _bindDialogEvents(container) {
-    container.querySelector('#timer-close-btn')?.addEventListener('click', () => this._closeDialog());
-    container.querySelector('#timer-cancel-btn')?.addEventListener('click', () => this._closeDialog());
+  /**
+   * 获取默认配置
+   */
+  static getStubConfig() {
+    return {
+      title: '定时编辑器',
+      card_id: 'timer_card_1'
+    };
+  }
 
-    // Mode tabs
-    container.querySelector('#timer-mode-timer')?.addEventListener('click', () => {
-      this._formData.mode = 'timer';
-      this._updateModeUI(container);
+  /**
+   * 设置卡片配置
+   */
+  setConfig(config) {
+    this._config = Object.assign({}, {
+      title: '定时编辑器',
+      card_id: 'timer_card_1',
+      icon: 'mdi:timer-outline',
+      show_empty: true
+    }, config);
+    if (!this._initialized) {
+      injectCardStyles();
+      this._initialized = true;
+    }
+    this._render();
+  }
+
+  /**
+   * 获取/设置 hass 对象
+   */
+  get hass() { return this._hass; }
+
+  set hass(hass) {
+    this._hass = hass;
+    if (this._initialized) {
+      this._updateAutomationStates();
+      this._render();
+    }
+  }
+
+  /**
+   * 获取默认表单数据
+   */
+  _getDefaultFormData() {
+    return {
+      enabled: true,
+      name: '',
+      entity_id: '',
+      action: 'turn_on',
+      repeat: 'daily',
+      hour: '',
+      minute: '',
+      scene_id: '',
+      auto_name: '',
+      condition: 'none',     // none / night_only / day_only
+      is_countdown: false,
+      countdown_hours: 0,
+      countdown_minutes: 0,
+      countdown_seconds: 0,
+      once: false
+    };
+  }
+
+  /**
+   * 主渲染方法
+   */
+  _render() {
+    if (!this.shadowRoot) return;
+    const container = document.createElement('div');
+    container.className = 'timer-editor-card';
+
+    // 渲染头部
+    container.appendChild(this._renderHeader());
+    // 渲染配置区段
+    container.appendChild(this._renderConfigSections());
+    // 渲染已创建的自动化列表
+    container.appendChild(this._renderAutomationList());
+    // 渲染底部操作栏
+    container.appendChild(this._renderBottomBar());
+
+    // 清空并插入
+    this.shadowRoot.innerHTML = '';
+    this.shadowRoot.appendChild(container);
+
+    // 绑定表单事件
+    requestAnimationFrame(() => this._bindFormEvents());
+  }
+
+  /**
+   * 渲染头部
+   */
+  _renderHeader() {
+    const frag = document.createDocumentFragment();
+    const header = document.createElement('div');
+    header.className = 'tec-header';
+
+    // 左侧：图标和标题
+    const left = document.createElement('div');
+    left.className = 'tec-header-left';
+
+    const icon = document.createElement('div');
+    icon.className = 'tec-header-icon';
+    icon.innerHTML = '&#9201;'; // ⏱
+
+    const titleWrap = document.createElement('div');
+    const title = document.createElement('div');
+    title.className = 'tec-header-title';
+    title.textContent = this._config.title || '定时编辑器';
+    const subtitle = document.createElement('div');
+    subtitle.className = 'tec-header-subtitle';
+    subtitle.textContent = 'DIY卡片-' + (this._config.card_id || '1');
+
+    titleWrap.appendChild(title);
+    titleWrap.appendChild(subtitle);
+    left.appendChild(icon);
+    left.appendChild(titleWrap);
+
+    // 右侧：配置信息
+    const right = document.createElement('div');
+    right.className = 'tec-card-config';
+    right.textContent = '卡片配置';
+
+    header.appendChild(left);
+    header.appendChild(right);
+    frag.appendChild(header);
+    return frag;
+  }
+
+  /**
+   * 渲染配置区段（折叠面板）
+   */
+  _renderConfigSections() {
+    const wrap = document.createElement('div');
+
+    // 1. 副实体区段
+    wrap.appendChild(this._renderSection(
+      'subEntity',
+      'mdi:link-variant',
+      '副实体',
+      '可选',
+      this._renderSubEntityContent()
+    ));
+
+    // 2. 图标区段
+    wrap.appendChild(this._renderSection(
+      'icon',
+      'mdi:palette',
+      '图标',
+      '',
+      this._renderIconContent()
+    ));
+
+    // 3. 功能区段
+    wrap.appendChild(this._renderSection(
+      'features',
+      'mdi:cog',
+      '功能',
+      '',
+      this._renderFeaturesContent()
+    ));
+
+    // 4. 自动化定时区段（核心）
+    wrap.appendChild(this._renderSection(
+      'timer',
+      'mdi:timer',
+      '自动化定时',
+      this._editingId ? '编辑中' : '新建',
+      this._renderAutomationTimerContent()
+    ));
+
+    return wrap;
+  }
+
+  /**
+   * 渲染单个折叠面板区段
+   */
+  _renderSection(sectionId, icon, title, badge, contentEl) {
+    const section = document.createElement('div');
+    section.className = 'tec-section';
+
+    const header = document.createElement('div');
+    header.className = 'tec-section-header';
+    header.dataset.section = sectionId;
+
+    const left = document.createElement('div');
+    left.className = 'tec-section-header-left';
+
+    const iconEl = document.createElement('div');
+    iconEl.className = 'tec-section-icon';
+    iconEl.textContent = ''; // 图标通过CSS background实现
+
+    const titleEl = document.createElement('span');
+    titleEl.className = 'tec-section-title';
+    titleEl.textContent = title;
+
+    left.appendChild(iconEl);
+    left.appendChild(titleEl);
+
+    if (badge) {
+      const badgeEl = document.createElement('span');
+      badgeEl.className = 'tec-section-badge';
+      badgeEl.textContent = badge;
+      left.appendChild(badgeEl);
+    }
+
+    const arrow = document.createElement('span');
+    arrow.className = 'tec-section-arrow' + (this._sectionsOpen[sectionId] ? ' open' : '');
+    arrow.innerHTML = '&#9654;'; // ▶
+
+    header.appendChild(left);
+    header.appendChild(arrow);
+
+    const body = document.createElement('div');
+    body.className = 'tec-section-body' + (this._sectionsOpen[sectionId] ? ' open' : '');
+    body.id = 'tec-section-' + sectionId;
+
+    if (contentEl) {
+      body.appendChild(contentEl);
+    }
+
+    section.appendChild(header);
+    section.appendChild(body);
+
+    // 点击折叠/展开
+    header.addEventListener('click', () => {
+      this._toggleSection(sectionId);
     });
-    container.querySelector('#timer-mode-countdown')?.addEventListener('click', () => {
-      this._formData.mode = 'countdown';
-      this._updateModeUI(container);
-    });
 
-    // Entity picker
-    this._renderEntityPicker(container);
+    return section;
+  }
 
-    container.querySelector('#timer-save-btn')?.addEventListener('click', () => this._saveAutomation());
-    container.querySelector('#timer-delete-btn')?.addEventListener('click', () => this._deleteAutomation());
-
-    const displayNameInput = container.querySelector('#timer-display-name');
-    const actionSelect = container.querySelector('#timer-action');
-    displayNameInput?.addEventListener('input', () => this._updateAutoName());
-    actionSelect?.addEventListener('change', () => this._updateAutoName());
-
-    // Restore entity display if editing
-    if (this._formData.entity_id && this._hass) {
-      const state = this._hass.states[this._formData.entity_id];
-      if (state) {
-        this._updateEntityDisplay(state);
+  /**
+   * 切换折叠面板
+   */
+  _toggleSection(sectionId) {
+    this._sectionsOpen[sectionId] = !this._sectionsOpen[sectionId];
+    const body = this.shadowRoot.getElementById('tec-section-' + sectionId);
+    const header = body ? body.previousElementSibling : null;
+    if (body) {
+      body.classList.toggle('open', this._sectionsOpen[sectionId]);
+    }
+    if (header) {
+      const arrow = header.querySelector('.tec-section-arrow');
+      if (arrow) {
+        arrow.classList.toggle('open', this._sectionsOpen[sectionId]);
       }
     }
   }
 
-  _renderEntityPicker(container) {
-    const wrap = container.querySelector('#timer-entity-picker-wrap');
-    if (!wrap || !this._hass) return;
+  /**
+   * 渲染副实体内容
+   */
+  _renderSubEntityContent() {
+    const wrap = document.createElement('div');
 
-    // Try to use HA native entity picker
-    const picker = document.createElement('ha-entity-picker');
-    if (picker) {
-      picker.hass = this._hass;
-      picker.value = this._formData.entity_id || '';
-      picker.label = '选择设备';
-      picker.allowCustomEntity = false;
-      picker.includeDomains = ['switch', 'light', 'fan', 'climate', 'cover', 'script', 'scene', 'input_boolean'];
-      picker.addEventListener('value-changed', (e) => {
-        this._formData.entity_id = e.detail.value;
-        if (this._hass && this._formData.entity_id) {
-          const state = this._hass.states[this._formData.entity_id];
-          if (state) this._updateAutoName();
+    const desc = document.createElement('div');
+    desc.style.cssText = 'font-size:13px;color:#888;margin-bottom:10px;';
+    desc.textContent = '选择关联的副实体（可选，用于联动控制）';
+
+    const pickerWrap = document.createElement('div');
+    pickerWrap.className = 'tec-entity-picker-wrap';
+    pickerWrap.innerHTML = '';
+
+    // 创建实体选择器
+    const picker = document.createElement('input');
+    picker.type = 'text';
+    picker.className = 'tec-form-input';
+    picker.placeholder = '例如: light.bedroom';
+    picker.dataset.field = 'sub_entity';
+    picker.value = this._config.sub_entity || '';
+
+    pickerWrap.appendChild(picker);
+    wrap.appendChild(desc);
+    wrap.appendChild(pickerWrap);
+
+    return wrap;
+  }
+
+  /**
+   * 渲染图标内容
+   */
+  _renderIconContent() {
+    const wrap = document.createElement('div');
+
+    const desc = document.createElement('div');
+    desc.style.cssText = 'font-size:13px;color:#888;margin-bottom:10px;';
+    desc.textContent = '选择卡片显示的图标';
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'tec-form-input';
+    input.placeholder = '例如: mdi:timer-outline';
+    input.dataset.field = 'card_icon';
+    input.value = this._config.icon || 'mdi:timer-outline';
+
+    wrap.appendChild(desc);
+    wrap.appendChild(input);
+
+    return wrap;
+  }
+
+  /**
+   * 渲染功能内容
+   */
+  _renderFeaturesContent() {
+    const wrap = document.createElement('div');
+
+    // 条件选项
+    const condLabel = document.createElement('div');
+    condLabel.style.cssText = 'font-size:13px;color:#888;margin-bottom:8px;';
+    condLabel.textContent = '执行条件';
+
+    const tags = document.createElement('div');
+    tags.className = 'tec-condition-tags';
+
+    const conditions = [
+      { value: 'none', label: '无条件' },
+      { value: 'night_only', label: '🌙 仅夜间' },
+      { value: 'day_only', label: '☀️ 仅白天' }
+    ];
+
+    conditions.forEach(cond => {
+      const tag = document.createElement('span');
+      tag.className = 'tec-condition-tag' + (this._formData.condition === cond.value ? ' selected' : '');
+      tag.textContent = cond.label;
+      tag.dataset.value = cond.value;
+      tag.addEventListener('click', () => {
+        this._formData.condition = cond.value;
+        tags.querySelectorAll('.tec-condition-tag').forEach(t => t.classList.remove('selected'));
+        tag.classList.add('selected');
+      });
+      tags.appendChild(tag);
+    });
+
+    wrap.appendChild(condLabel);
+    wrap.appendChild(tags);
+
+    // 倒计时模式
+    const countdownRow = document.createElement('div');
+    countdownRow.className = 'tec-toggle-row';
+    countdownRow.style.marginTop = '12px';
+
+    const countdownLabel = document.createElement('span');
+    countdownLabel.className = 'tec-toggle-label';
+    countdownLabel.textContent = '倒计时模式';
+
+    const countdownToggle = document.createElement('div');
+    countdownToggle.className = 'tec-toggle' + (this._formData.is_countdown ? ' active' : '');
+    countdownToggle.innerHTML = '<div class="tec-toggle-knob"></div>';
+    countdownToggle.addEventListener('click', () => {
+      this._formData.is_countdown = !this._formData.is_countdown;
+      countdownToggle.classList.toggle('active', this._formData.is_countdown);
+    });
+
+    countdownRow.appendChild(countdownLabel);
+    countdownRow.appendChild(countdownToggle);
+    wrap.appendChild(countdownRow);
+
+    // 单次任务
+    const onceRow = document.createElement('div');
+    onceRow.className = 'tec-toggle-row';
+
+    const onceLabel = document.createElement('span');
+    onceLabel.className = 'tec-toggle-label';
+    onceLabel.textContent = '单次任务（执行后自动删除）';
+
+    const onceToggle = document.createElement('div');
+    onceToggle.className = 'tec-toggle' + (this._formData.once ? ' active' : '');
+    onceToggle.innerHTML = '<div class="tec-toggle-knob"></div>';
+    onceToggle.addEventListener('click', () => {
+      this._formData.once = !this._formData.once;
+      onceToggle.classList.toggle('active', this._formData.once);
+    });
+
+    onceRow.appendChild(onceLabel);
+    onceRow.appendChild(onceToggle);
+    wrap.appendChild(onceRow);
+
+    return wrap;
+  }
+
+  /**
+   * 渲染自动化定时内容（核心区域）
+   */
+  _renderAutomationTimerContent() {
+    const wrap = document.createElement('div');
+
+    // Toggle 开关
+    const toggleRow = document.createElement('div');
+    toggleRow.className = 'tec-toggle-row';
+
+    const toggleLabel = document.createElement('span');
+    toggleLabel.className = 'tec-toggle-label';
+    toggleLabel.textContent = '启用定时自动化';
+
+    const toggle = document.createElement('div');
+    toggle.className = 'tec-toggle' + (this._formData.enabled ? ' active' : '');
+    toggle.innerHTML = '<div class="tec-toggle-knob"></div>';
+    toggle.addEventListener('click', () => {
+      this._formData.enabled = !this._formData.enabled;
+      toggle.classList.toggle('active', this._formData.enabled);
+    });
+
+    toggleRow.appendChild(toggleLabel);
+    toggleRow.appendChild(toggle);
+    wrap.appendChild(toggleRow);
+
+    // 场景选择器
+    wrap.appendChild(this._renderScenePicker());
+
+    // 表单字段
+    if (!this._formData.is_countdown) {
+      wrap.appendChild(this._renderFormFields());
+    } else {
+      wrap.appendChild(this._renderCountdownFields());
+    }
+
+    // 操作按钮行
+    wrap.appendChild(this._renderFormActions());
+
+    // 同步状态
+    if (this._editingId) {
+      wrap.appendChild(this._renderSyncStatus());
+    }
+
+    return wrap;
+  }
+
+  /**
+   * 渲染场景选择器
+   */
+  _renderScenePicker() {
+    const group = document.createElement('div');
+    group.className = 'tec-form-group full-width';
+    group.style.marginTop = '12px';
+
+    const label = document.createElement('label');
+    label.className = 'tec-form-label';
+    label.textContent = '场景选择（可选）';
+
+    const pickerWrap = document.createElement('div');
+    pickerWrap.className = 'tec-scene-picker';
+
+    const select = document.createElement('select');
+    select.className = 'tec-form-select';
+    select.dataset.field = 'scene_id';
+
+    // 默认空选项
+    const emptyOpt = document.createElement('option');
+    emptyOpt.value = '';
+    emptyOpt.textContent = '— 不使用场景 —';
+    select.appendChild(emptyOpt);
+
+    // 预设场景列表
+    const scenes = [
+      { id: 'scene.home', label: '🏠 回家模式' },
+      { id: 'scene.away', label: '🚪 离家模式' },
+      { id: 'scene.sleep', label: '😴 睡眠模式' },
+      { id: 'scene.wake', label: '🌅 起床模式' },
+      { id: 'scene.movie', label: '🎬 影院模式' },
+      { id: 'scene.work', label: '💼 工作模式' }
+    ];
+
+    // 尝试从 HA 获取实际场景
+    if (this._hass) {
+      const haScenes = Object.values(this._hass.states).filter(e => e.entity_id.startsWith('scene.'));
+      if (haScenes.length > 0) {
+        // 添加 HA 实际场景
+        haScenes.forEach(scene => {
+          const opt = document.createElement('option');
+          opt.value = scene.entity_id;
+          opt.textContent = scene.attributes.friendly_name || scene.entity_id;
+          select.appendChild(opt);
+        });
+      } else {
+        // 使用预设场景
+        scenes.forEach(scene => {
+          const opt = document.createElement('option');
+          opt.value = scene.id;
+          opt.textContent = scene.label;
+          select.appendChild(opt);
+        });
+      }
+    } else {
+      scenes.forEach(scene => {
+        const opt = document.createElement('option');
+        opt.value = scene.id;
+        opt.textContent = scene.label;
+        select.appendChild(opt);
+      });
+    }
+
+    select.value = this._formData.scene_id || '';
+
+    const clearBtn = document.createElement('button');
+    clearBtn.className = 'tec-scene-clear';
+    clearBtn.innerHTML = '&times;';
+    clearBtn.title = '清除场景';
+    clearBtn.addEventListener('click', () => {
+      select.value = '';
+      this._formData.scene_id = '';
+    });
+
+    pickerWrap.appendChild(select);
+    pickerWrap.appendChild(clearBtn);
+    group.appendChild(label);
+    group.appendChild(pickerWrap);
+
+    return group;
+  }
+
+  /**
+   * 渲染表单字段（定时模式）
+   */
+  _renderFormFields() {
+    const grid = document.createElement('div');
+    grid.className = 'tec-form-grid';
+
+    // 主实体名称（全宽）
+    grid.appendChild(this._renderFormGroup('主实体', 'entity_id', 'text',
+      this._formData.entity_id, '例如: light.living_room', true));
+
+    // 执行动作（左列）
+    const actionGroup = this._renderFormGroup('执行动作', 'action', 'select',
+      this._formData.action, '', false);
+    const actionSelect = actionGroup.querySelector('.tec-form-select');
+    if (actionSelect) {
+      actionSelect.innerHTML = '';
+      const actions = [
+        { value: 'turn_on', label: '打开' },
+        { value: 'turn_off', label: '关闭' },
+        { value: 'toggle', label: '切换' }
+      ];
+      actions.forEach(a => {
+        const opt = document.createElement('option');
+        opt.value = a.value;
+        opt.textContent = a.label;
+        actionSelect.appendChild(opt);
+      });
+      actionSelect.value = this._formData.action;
+    }
+    grid.appendChild(actionGroup);
+
+    // 重复周期（右列）
+    const repeatGroup = this._renderFormGroup('重复周期', 'repeat', 'select',
+      this._formData.repeat, '', false);
+    const repeatSelect = repeatGroup.querySelector('.tec-form-select');
+    if (repeatSelect) {
+      repeatSelect.innerHTML = '';
+      const repeats = [
+        { value: 'daily', label: '每天' },
+        { value: 'weekday', label: '工作日' },
+        { value: 'weekend', label: '周末' },
+        { value: 'mon', label: '周一' },
+        { value: 'tue', label: '周二' },
+        { value: 'wed', label: '周三' },
+        { value: 'thu', label: '周四' },
+        { value: 'fri', label: '周五' },
+        { value: 'sat', label: '周六' },
+        { value: 'sun', label: '周日' },
+        { value: 'once', label: '仅一次' }
+      ];
+      repeats.forEach(r => {
+        const opt = document.createElement('option');
+        opt.value = r.value;
+        opt.textContent = r.label;
+        repeatSelect.appendChild(opt);
+      });
+      repeatSelect.value = this._formData.repeat;
+    }
+    grid.appendChild(repeatGroup);
+
+    // 小时（左列）
+    grid.appendChild(this._renderFormGroup('小时', 'hour', 'number',
+      this._formData.hour, '0-23', false));
+
+    // 分钟（右列）
+    grid.appendChild(this._renderFormGroup('分钟', 'minute', 'number',
+      this._formData.minute, '0-59', false));
+
+    // 自动化名称（全宽）
+    grid.appendChild(this._renderFormGroup('自动化名称', 'auto_name', 'text',
+      this._formData.auto_name, '留空自动生成', true));
+
+    // 验证错误提示
+    const errorDiv = document.createElement('div');
+    errorDiv.className = 'tec-form-error';
+    errorDiv.id = 'tec-form-error-msg';
+    errorDiv.textContent = '';
+    grid.appendChild(errorDiv);
+
+    return grid;
+  }
+
+  /**
+   * 渲染倒计时字段
+   */
+  _renderCountdownFields() {
+    const grid = document.createElement('div');
+    grid.className = 'tec-form-grid';
+    grid.style.marginTop = '12px';
+
+    // 主实体名称（全宽）
+    grid.appendChild(this._renderFormGroup('主实体', 'entity_id', 'text',
+      this._formData.entity_id, '例如: light.living_room', true));
+
+    // 执行动作
+    const actionGroup = this._renderFormGroup('执行动作', 'action', 'select',
+      this._formData.action, '', false);
+    const actionSelect = actionGroup.querySelector('.tec-form-select');
+    if (actionSelect) {
+      actionSelect.innerHTML = '';
+      [{ value: 'turn_on', label: '打开' }, { value: 'turn_off', label: '关闭' }, { value: 'toggle', label: '切换' }]
+        .forEach(a => {
+          const opt = document.createElement('option');
+          opt.value = a.value;
+          opt.textContent = a.label;
+          actionSelect.appendChild(opt);
+        });
+      actionSelect.value = this._formData.action;
+    }
+    grid.appendChild(actionGroup);
+
+    // 倒计时设置（全宽）
+    const cdGroup = document.createElement('div');
+    cdGroup.className = 'tec-form-group full-width';
+
+    const cdLabel = document.createElement('label');
+    cdLabel.className = 'tec-form-label';
+    cdLabel.textContent = '倒计时时长';
+
+    const cdFields = document.createElement('div');
+    cdFields.className = 'tec-countdown-fields';
+
+    const cdH = document.createElement('input');
+    cdH.type = 'number';
+    cdH.className = 'tec-form-input';
+    cdH.min = '0';
+    cdH.max = '23';
+    cdH.value = this._formData.countdown_hours;
+    cdH.dataset.field = 'countdown_hours';
+    cdH.addEventListener('input', () => { this._formData.countdown_hours = parseInt(cdH.value) || 0; });
+
+    const cdHLabel = document.createElement('span');
+    cdHLabel.className = 'tec-countdown-unit';
+    cdHLabel.textContent = '时';
+
+    const cdM = document.createElement('input');
+    cdM.type = 'number';
+    cdM.className = 'tec-form-input';
+    cdM.min = '0';
+    cdM.max = '59';
+    cdM.value = this._formData.countdown_minutes;
+    cdM.dataset.field = 'countdown_minutes';
+    cdM.addEventListener('input', () => { this._formData.countdown_minutes = parseInt(cdM.value) || 0; });
+
+    const cdMLabel = document.createElement('span');
+    cdMLabel.className = 'tec-countdown-unit';
+    cdMLabel.textContent = '分';
+
+    const cdS = document.createElement('input');
+    cdS.type = 'number';
+    cdS.className = 'tec-form-input';
+    cdS.min = '0';
+    cdS.max = '59';
+    cdS.value = this._formData.countdown_seconds;
+    cdS.dataset.field = 'countdown_seconds';
+    cdS.addEventListener('input', () => { this._formData.countdown_seconds = parseInt(cdS.value) || 0; });
+
+    const cdSLabel = document.createElement('span');
+    cdSLabel.className = 'tec-countdown-unit';
+    cdSLabel.textContent = '秒';
+
+    cdFields.appendChild(cdH);
+    cdFields.appendChild(cdHLabel);
+    cdFields.appendChild(cdM);
+    cdFields.appendChild(cdMLabel);
+    cdFields.appendChild(cdS);
+    cdFields.appendChild(cdSLabel);
+
+    cdGroup.appendChild(cdLabel);
+    cdGroup.appendChild(cdFields);
+    grid.appendChild(cdGroup);
+
+    // 自动化名称（全宽）
+    grid.appendChild(this._renderFormGroup('自动化名称', 'auto_name', 'text',
+      this._formData.auto_name, '留空自动生成', true));
+
+    // 验证错误提示
+    const errorDiv = document.createElement('div');
+    errorDiv.className = 'tec-form-error';
+    errorDiv.id = 'tec-form-error-msg';
+    grid.appendChild(errorDiv);
+
+    return grid;
+  }
+
+  /**
+   * 渲染单个表单组
+   */
+  _renderFormGroup(labelText, field, type, value, placeholder, fullWidth) {
+    const group = document.createElement('div');
+    if (fullWidth) group.className = 'tec-form-group full-width';
+    else group.className = 'tec-form-group';
+
+    const label = document.createElement('label');
+    label.className = 'tec-form-label';
+    label.textContent = labelText;
+
+    let input;
+    if (type === 'select') {
+      input = document.createElement('select');
+      input.className = 'tec-form-select';
+    } else {
+      input = document.createElement('input');
+      input.className = 'tec-form-input';
+      input.type = type || 'text';
+    }
+    input.dataset.field = field;
+    input.value = value || '';
+    if (placeholder) input.placeholder = placeholder;
+
+    group.appendChild(label);
+    group.appendChild(input);
+
+    return group;
+  }
+
+  /**
+   * 渲染表单操作按钮
+   */
+  _renderFormActions() {
+    const row = document.createElement('div');
+    row.className = 'tec-automation-actions';
+
+    if (this._editingId) {
+      // 编辑模式：更新按钮
+      const updateBtn = document.createElement('button');
+      updateBtn.className = 'tec-btn tec-btn-primary tec-btn-update';
+      updateBtn.innerHTML = '&#10003; 更新自动化';
+      updateBtn.addEventListener('click', () => this._saveAutomation());
+      row.appendChild(updateBtn);
+
+      const cancelEditBtn = document.createElement('button');
+      cancelEditBtn.className = 'tec-btn tec-btn-delete';
+      cancelEditBtn.innerHTML = '&#8634;';
+      cancelEditBtn.title = '取消编辑';
+      cancelEditBtn.style.borderColor = '#e0e0e0';
+      cancelEditBtn.style.color = '#888';
+      cancelEditBtn.addEventListener('click', () => this._cancelEdit());
+      row.appendChild(cancelEditBtn);
+    } else {
+      // 新建模式：创建按钮
+      const createBtn = document.createElement('button');
+      createBtn.className = 'tec-btn tec-btn-primary';
+      createBtn.innerHTML = '&#43; 创建自动化';
+      createBtn.addEventListener('click', () => this._saveAutomation());
+      row.appendChild(createBtn);
+    }
+
+    // 删除按钮（仅编辑模式显示）
+    if (this._editingId) {
+      const deleteBtn = document.createElement('button');
+      deleteBtn.className = 'tec-btn-delete';
+      deleteBtn.innerHTML = '&#128465;'; // 🗑
+      deleteBtn.title = '删除自动化';
+      deleteBtn.addEventListener('click', () => this._deleteAutomation(this._editingId));
+      row.appendChild(deleteBtn);
+    }
+
+    return row;
+  }
+
+  /**
+   * 渲染同步状态
+   */
+  _renderSyncStatus() {
+    const wrap = document.createElement('div');
+    wrap.style.marginTop = '12px';
+
+    // 查找当前编辑的自动化
+    const auto = this._automations.find(a => a.id === this._editingId);
+
+    const syncRow = document.createElement('div');
+    syncRow.className = 'tec-sync-status ' + (auto ? 'synced' : 'pending');
+    syncRow.innerHTML = auto
+      ? '&#10003; 已同步到 Home Assistant'
+      : '&#9203; 未同步';
+
+    if (this._editingId) {
+      const entityId = document.createElement('div');
+      entityId.className = 'tec-entity-id';
+      entityId.textContent = 'Entity ID: ' + (auto ? auto.entity_id : 'automation.' + this._pinyin(this._formData.auto_name || 'timer'));
+      wrap.appendChild(syncRow);
+      wrap.appendChild(entityId);
+    } else {
+      wrap.appendChild(syncRow);
+    }
+
+    return wrap;
+  }
+
+  /**
+   * 渲染自动化列表
+   */
+  _renderAutomationList() {
+    const section = document.createElement('div');
+
+    const listHeader = document.createElement('div');
+    listHeader.style.cssText = 'font-size:14px;font-weight:600;color:#333;margin-bottom:10px;display:flex;align-items:center;justify-content:space-between;';
+
+    const listTitle = document.createElement('span');
+    listTitle.textContent = '已创建的自动化';
+
+    const countBadge = document.createElement('span');
+    countBadge.style.cssText = 'font-size:12px;color:#888;background:#f5f5f5;padding:2px 8px;border-radius:10px;';
+    countBadge.textContent = this._automations.length + ' 个';
+
+    listHeader.appendChild(listTitle);
+    listHeader.appendChild(countBadge);
+    section.appendChild(listHeader);
+
+    const list = document.createElement('div');
+    list.className = 'tec-automation-list';
+
+    if (this._automations.length === 0) {
+      // 空状态
+      const empty = document.createElement('div');
+      empty.className = 'tec-empty';
+      empty.innerHTML = `
+        <div class="tec-empty-icon">&#9201;</div>
+        <div class="tec-empty-text">暂无自动化</div>
+        <div class="tec-empty-sub">在上方定时区域创建你的第一个定时任务</div>
+      `;
+      list.appendChild(empty);
+    } else {
+      this._automations.forEach(auto => {
+        list.appendChild(this._renderAutomationItem(auto));
+      });
+    }
+
+    section.appendChild(list);
+    return section;
+  }
+
+  /**
+   * 渲染单个自动化项
+   */
+  _renderAutomationItem(auto) {
+    const item = document.createElement('div');
+    item.className = 'tec-automation-item';
+
+    // Toggle 开关
+    const toggleWrap = document.createElement('div');
+    toggleWrap.className = 'tec-automation-item-toggle';
+
+    const toggle = document.createElement('div');
+    toggle.className = 'tec-toggle' + (auto.state === 'on' ? ' active' : '');
+    toggle.innerHTML = '<div class="tec-toggle-knob"></div>';
+    toggle.addEventListener('click', () => this._toggleAutomation(auto));
+
+    toggleWrap.appendChild(toggle);
+
+    // 信息
+    const info = document.createElement('div');
+    info.className = 'tec-automation-item-info';
+
+    const name = document.createElement('div');
+    name.className = 'tec-automation-item-name';
+    name.textContent = auto.alias || auto.name || '未命名';
+
+    const desc = document.createElement('div');
+    desc.className = 'tec-automation-item-desc';
+    desc.textContent = this._getAutoDescription(auto);
+
+    info.appendChild(name);
+    info.appendChild(desc);
+
+    // 时间显示
+    const timeEl = document.createElement('div');
+    timeEl.className = 'tec-automation-item-time';
+    timeEl.textContent = this._getAutoTimeDisplay(auto);
+
+    // 编辑按钮
+    const editBtn = document.createElement('button');
+    editBtn.className = 'tec-automation-item-edit';
+    editBtn.innerHTML = '&#9998;'; // ✎
+    editBtn.title = '编辑';
+    editBtn.addEventListener('click', () => this._editAutomation(auto));
+
+    // 删除按钮
+    const deleteBtn = document.createElement('button');
+    deleteBtn.className = 'tec-automation-item-delete';
+    deleteBtn.innerHTML = '&#10005;'; // ✕
+    deleteBtn.title = '删除';
+    deleteBtn.addEventListener('click', () => this._deleteAutomation(auto.id));
+
+    item.appendChild(toggleWrap);
+    item.appendChild(info);
+    item.appendChild(timeEl);
+    item.appendChild(editBtn);
+    item.appendChild(deleteBtn);
+
+    return item;
+  }
+
+  /**
+   * 获取自动化描述文本
+   */
+  _getAutoDescription(auto) {
+    const parts = [];
+    if (auto.entity) parts.push(auto.entity);
+    if (auto.action) {
+      const actionMap = { 'turn_on': '打开', 'turn_off': '关闭', 'toggle': '切换' };
+      parts.push(actionMap[auto.action] || auto.action);
+    }
+    if (auto.repeat) {
+      const repeatMap = {
+        'daily': '每天', 'weekday': '工作日', 'weekend': '周末',
+        'once': '仅一次', 'mon': '周一', 'tue': '周二', 'wed': '周三',
+        'thu': '周四', 'fri': '周五', 'sat': '周六', 'sun': '周日'
+      };
+      parts.push(repeatMap[auto.repeat] || auto.repeat);
+    }
+    return parts.join(' · ') || '定时任务';
+  }
+
+  /**
+   * 获取自动化时间显示
+   */
+  _getAutoTimeDisplay(auto) {
+    if (auto.is_countdown) {
+      const h = auto.countdown_hours || 0;
+      const m = auto.countdown_minutes || 0;
+      const s = auto.countdown_seconds || 0;
+      return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+    }
+    const hour = auto.hour || '00';
+    const minute = auto.minute || '00';
+    return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+  }
+
+  /**
+   * 渲染底部操作栏
+   */
+  _renderBottomBar() {
+    const bar = document.createElement('div');
+    bar.className = 'tec-bottom-bar';
+
+    // 代码编辑器链接
+    const codeLink = document.createElement('span');
+    codeLink.className = 'tec-bottom-code';
+    codeLink.innerHTML = '&lt;/&gt; 代码编辑器';
+    codeLink.addEventListener('click', () => this._showCodeEditor());
+
+    // 间隔
+    const spacer = document.createElement('div');
+    spacer.className = 'tec-bottom-spacer';
+
+    // 取消按钮
+    const cancelBtn = document.createElement('button');
+    cancelBtn.className = 'tec-bottom-cancel';
+    cancelBtn.textContent = '取消';
+    cancelBtn.addEventListener('click', () => {
+      this._cancelEdit();
+      this._formData = this._getDefaultFormData();
+      this._render();
+    });
+
+    // 保存按钮
+    const saveBtn = document.createElement('button');
+    saveBtn.className = 'tec-bottom-save';
+    saveBtn.textContent = '保存卡片';
+    saveBtn.addEventListener('click', () => this._saveCard());
+
+    bar.appendChild(codeLink);
+    bar.appendChild(spacer);
+    bar.appendChild(cancelBtn);
+    bar.appendChild(saveBtn);
+
+    return bar;
+  }
+
+  /**
+   * 绑定表单事件
+   */
+  _bindFormEvents() {
+    if (!this.shadowRoot) return;
+
+    // 绑定所有带 data-field 属性的输入元素
+    const inputs = this.shadowRoot.querySelectorAll('[data-field]');
+    inputs.forEach(input => {
+      const field = input.dataset.field;
+
+      // 移除旧监听器（使用替换方式）
+      const newInput = input.cloneNode(true);
+      input.parentNode.replaceChild(newInput, input);
+
+      newInput.addEventListener('input', () => {
+        if (field === 'entity_id') {
+          this._formData.entity_id = newInput.value;
+          this._updateAutoName();
+        } else if (field === 'action') {
+          this._formData.action = newInput.value;
+        } else if (field === 'repeat') {
+          this._formData.repeat = newInput.value;
+        } else if (field === 'hour') {
+          this._formData.hour = newInput.value;
+        } else if (field === 'minute') {
+          this._formData.minute = newInput.value;
+        } else if (field === 'auto_name') {
+          this._formData.auto_name = newInput.value;
+        } else if (field === 'scene_id') {
+          this._formData.scene_id = newInput.value;
+        } else if (field === 'sub_entity') {
+          this._config.sub_entity = newInput.value;
+        } else if (field === 'card_icon') {
+          this._config.icon = newInput.value;
+        } else if (field === 'countdown_hours') {
+          this._formData.countdown_hours = parseInt(newInput.value) || 0;
+        } else if (field === 'countdown_minutes') {
+          this._formData.countdown_minutes = parseInt(newInput.value) || 0;
+        } else if (field === 'countdown_seconds') {
+          this._formData.countdown_seconds = parseInt(newInput.value) || 0;
         }
       });
-      wrap.innerHTML = '';
-      wrap.appendChild(picker);
-      return;
-    }
 
-    // Fallback to simple select
-    const select = document.createElement('select');
-    select.className = 'timer-form-select';
-    select.id = 'timer-entity-id-native';
-    const entities = Object.keys(this._hass.states)
-      .filter(eid => eid.startsWith('switch.') || eid.startsWith('light.') || eid.startsWith('fan.') || eid.startsWith('climate.') || eid.startsWith('cover.') || eid.startsWith('script.') || eid.startsWith('scene.') || eid.startsWith('input_boolean.'));
-    select.innerHTML = '<option value="">请选择设备</option>' +
-      entities.map(eid => {
-        const s = this._hass.states[eid];
-        const name = s?.attributes?.friendly_name || eid;
-        const selected = eid === this._formData.entity_id ? 'selected' : '';
-        return `<option value="${eid}" ${selected}>${name} (${eid})</option>`;
-      }).join('');
-    select.addEventListener('change', (e) => {
-      this._formData.entity_id = e.target.value;
-      this._updateAutoName();
+      newInput.addEventListener('change', () => {
+        if (field === 'scene_id') {
+          this._formData.scene_id = newInput.value;
+        }
+      });
     });
-    wrap.innerHTML = '';
-    wrap.appendChild(select);
   }
 
-  _updateModeUI(container) {
-    const timerSection = container.querySelector('#timer-timer-section');
-    const countdownSection = container.querySelector('#timer-countdown-section');
-    const saveBtn = container.querySelector('#timer-save-btn');
-    const timerTab = container.querySelector('#timer-mode-timer');
-    const countdownTab = container.querySelector('#timer-mode-countdown');
-
-    if (this._formData.mode === 'timer') {
-      if (timerSection) timerSection.style.display = '';
-      if (countdownSection) countdownSection.style.display = 'none';
-      if (saveBtn) saveBtn.textContent = this._editingEntityId ? '保存定时' : '保存定时';
-      if (timerTab) timerTab.classList.add('active');
-      if (countdownTab) countdownTab.classList.remove('active');
-    } else {
-      if (timerSection) timerSection.style.display = 'none';
-      if (countdownSection) countdownSection.style.display = '';
-      if (saveBtn) saveBtn.textContent = this._editingEntityId ? '保存倒计时' : '启动倒计时';
-      if (timerTab) timerTab.classList.remove('active');
-      if (countdownTab) countdownTab.classList.add('active');
-    }
-  }
-
+  /**
+   * 自动更新自动化名称
+   */
   _updateAutoName() {
-    const displayName = this._dialog?.querySelector('#timer-display-name')?.value || '';
-    const action = this._dialog?.querySelector('#timer-action')?.value || 'turn_off';
-    const actionText = { turn_on: '开启', turn_off: '关闭', toggle: '切换' }[action] || '执行';
+    if (this._formData.auto_name && this._formData.auto_name !== '') return;
+    // 留空时自动生成名称，不自动填充输入框
+  }
 
-    if (!displayName) return;
+  /**
+   * 验证表单数据
+   */
+  _validateForm() {
+    const errors = [];
 
-    const autoName = `${actionText}${displayName}`;
-    const entityId = 'automation.' + this._pinyin(autoName);
-
-    const autoNameInput = this._dialog?.querySelector('#timer-auto-name');
-    const entityIdInput = this._dialog?.querySelector('#timer-entity-id');
-    if (autoNameInput && !autoNameInput.value) {
-      autoNameInput.value = autoName;
+    if (!this._formData.entity_id) {
+      errors.push('请输入主实体');
     }
-    if (entityIdInput && !this._editingEntityId) {
-      entityIdInput.value = entityId;
+
+    if (this._formData.is_countdown) {
+      const total = (this._formData.countdown_hours || 0) +
+                    (this._formData.countdown_minutes || 0) +
+                    (this._formData.countdown_seconds || 0);
+      if (total <= 0) {
+        errors.push('请设置倒计时时长');
+      }
+    } else {
+      if (this._formData.hour === '' || this._formData.hour === null) {
+        errors.push('未选择时间');
+      }
     }
-  }
 
-  _updateEntityDisplay(state) {
-    // No-op for native picker
-  }
+    // 显示或隐藏错误
+    const errorEl = this.shadowRoot.getElementById('tec-form-error-msg');
+    if (errorEl) {
+      if (errors.length > 0) {
+        errorEl.textContent = errors[0];
+        errorEl.classList.add('visible');
 
-  _generateEntityId() {
-    const name = this._formData.display_name || 'timer_task';
-    return this._pinyin(name);
-  }
-
-  _pinyin(str) {
-    const map = {
-      '定': 'ding', '时': 'shi', '关': 'guan', '开': 'kai', '充': 'chong',
-      '电': 'dian', '器': 'qi', '灯': 'deng', '空': 'kong', '调': 'tiao',
-      '窗': 'chuang', '帘': 'lian', '插': 'cha', '座': 'zuo', '扇': 'shan',
-      '倒': 'dao', '计': 'ji', '分': 'fen', '秒': 'miao', '钟': 'zhong',
-    };
-    let result = '';
-    for (const char of str) {
-      if (map[char]) result += map[char];
-      else if (/[a-zA-Z0-9]/.test(char)) result += char.toLowerCase();
-      else if (char === ' ') result += '_';
+        // 标记对应的输入框
+        if (errors[0].includes('实体')) {
+          const entityInput = this.shadowRoot.querySelector('[data-field="entity_id"]');
+          if (entityInput) entityInput.classList.add('error');
+        }
+        if (errors[0].includes('时间') || errors[0].includes('倒计时')) {
+          const hourInput = this.shadowRoot.querySelector('[data-field="hour"]');
+          if (hourInput) hourInput.classList.add('error');
+        }
+      } else {
+        errorEl.textContent = '';
+        errorEl.classList.remove('visible');
+        // 清除所有错误标记
+        this.shadowRoot.querySelectorAll('.tec-form-input.error').forEach(el => el.classList.remove('error'));
+      }
     }
-    return result || 'timer_task_' + Date.now().toString(36).slice(-4);
+
+    return errors.length === 0;
   }
 
+  /**
+   * 保存自动化
+   */
   async _saveAutomation() {
-    if (!this._hass) return;
-
-    const dialog = this._dialog;
-    const entityId = this._formData.entity_id;
-    const displayName = dialog?.querySelector('#timer-display-name')?.value || '';
-    const action = dialog?.querySelector('#timer-action')?.value || 'turn_off';
-    const condition = dialog?.querySelector('#timer-condition')?.value || 'none';
-    const mode = this._formData.mode;
-    const autoName = dialog?.querySelector('#timer-auto-name')?.value || displayName;
-
-    if (!entityId) {
-      alert('请选择设备');
+    if (!this._hass) {
+      this._showToast('请先连接 Home Assistant', 'error');
       return;
     }
 
-    const saveBtn = dialog?.querySelector('#timer-save-btn');
-    if (saveBtn) {
-      saveBtn.textContent = '保存中...';
-      saveBtn.style.opacity = '0.7';
-      saveBtn.disabled = true;
+    // 验证表单
+    if (!this._validateForm()) return;
+
+    // 生成自动化名称
+    let autoName = this._formData.auto_name;
+    if (!autoName || autoName.trim() === '') {
+      autoName = this._generateAutoName();
+      this._formData.auto_name = autoName;
     }
 
-    const serviceMap = {
-      turn_on: 'homeassistant.turn_on',
-      turn_off: 'homeassistant.turn_off',
-      toggle: 'homeassistant.toggle',
-    };
-
-    let automationConfig = {};
-
-    if (mode === 'timer') {
-      const repeat = dialog?.querySelector('#timer-repeat')?.value || 'once';
-      const hour = parseInt(dialog?.querySelector('#timer-hour')?.value || '0');
-      const minute = parseInt(dialog?.querySelector('#timer-minute')?.value || '0');
-      const singleUse = dialog?.querySelector('#timer-single-use')?.checked || false;
-      const timeStr = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
-
-      const trigger = {
-        platform: 'time',
-        at: timeStr,
-      };
-
-      let conditions = [];
-      if (repeat === 'weekdays') {
-        conditions.push({
-          condition: 'time',
-          weekday: ['mon', 'tue', 'wed', 'thu', 'fri'],
-        });
-      } else if (repeat === 'weekends') {
-        conditions.push({
-          condition: 'time',
-          weekday: ['sat', 'sun'],
-        });
-      }
-
-      if (condition === 'night') {
-        conditions.push({ condition: 'state', entity_id: 'sun.sun', state: 'below_horizon' });
-      } else if (condition === 'day') {
-        conditions.push({ condition: 'state', entity_id: 'sun.sun', state: 'above_horizon' });
-      }
-
-      const actionsList = [{
-        service: serviceMap[action] || 'homeassistant.turn_off',
-        target: { entity_id: entityId },
-      }];
-
-      if (singleUse) {
-        actionsList.push({
-          service: 'automation.turn_off',
-          target: { entity_id: '{{ this.entity_id }}' },
-        });
-      }
-
-      automationConfig = {
-        alias: autoName || displayName,
-        description: `定时${action === 'turn_on' ? '开启' : action === 'toggle' ? '切换' : '关闭'} ${displayName}`,
-        trigger: [trigger],
-        condition: conditions.length > 0 ? conditions : [],
-        action: actionsList,
-        mode: 'single',
-      };
-
-      if (singleUse) {
-        automationConfig.variables = { single_use: true };
-      }
-    } else {
-      // Countdown mode
-      const countdownMinutes = parseInt(dialog?.querySelector('#timer-countdown-minutes')?.value || '30');
-      const delayStr = `${String(Math.floor(countdownMinutes / 60)).padStart(2, '0')}:${String(countdownMinutes % 60).padStart(2, '0')}:00`;
-
-      let conditions = [];
-      if (condition === 'night') {
-        conditions.push({ condition: 'state', entity_id: 'sun.sun', state: 'below_horizon' });
-      } else if (condition === 'day') {
-        conditions.push({ condition: 'state', entity_id: 'sun.sun', state: 'above_horizon' });
-      }
-
-      automationConfig = {
-        alias: autoName || displayName,
-        description: `倒计时${countdownMinutes}分钟后${action === 'turn_on' ? '开启' : action === 'toggle' ? '切换' : '关闭'} ${displayName}`,
-        trigger: [],
-        condition: conditions.length > 0 ? conditions : [],
-        action: [
-          { delay: delayStr },
-          {
-            service: serviceMap[action] || 'homeassistant.turn_off',
-            target: { entity_id: entityId },
-          }
-        ],
-        mode: 'single',
-      };
-    }
-
-    const yamlText = this._toYaml(automationConfig);
-
-    const fetchWithTimeout = (url, options, timeout = 5000) => {
-      return Promise.race([
-        fetch(url, options),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), timeout))
-      ]);
-    };
+    // 构建 HA 自动化配置
+    const automationConfig = this._buildAutomationConfig(autoName);
 
     try {
-      const autoId = this._editingEntityId ? this._editingEntityId.replace('automation.', '') : 'timer_' + Date.now().toString(36).slice(-6);
-      let saved = false;
-
-      // Method 1: fetchWithAuth
-      if (this._hass.fetchWithAuth) {
-        try {
-          const resp = await fetchWithTimeout(
-            `/api/config/automation/config/${autoId}`,
-            { method: 'POST', body: JSON.stringify(automationConfig) },
-            5000
-          );
-          if (resp.ok) saved = true;
-        } catch (e) {
-          console.log('fetchWithAuth failed:', e.message);
+      if (this._editingId) {
+        // 更新已有自动化
+        const existingAuto = this._automations.find(a => a.id === this._editingId);
+        if (existingAuto) {
+          await this._hass.callApi('POST', `/api/config/automation/config/${existingAuto.config_id}`, automationConfig);
+          this._showToast('自动化已更新', 'success');
         }
+      } else {
+        // 创建新自动化
+        const result = await this._hass.callApi('POST', '/api/config/automation/config', automationConfig);
+        this._showToast('自动化已创建', 'success');
       }
 
-      // Method 2: standard fetch with token
-      if (!saved) {
-        const token = this._hass.auth?.accessToken || this._hass.auth?.data?.access_token;
-        if (token) {
-          try {
-            const resp = await fetchWithTimeout(
-              `/api/config/automation/config/${autoId}`,
-              {
-                method: 'POST',
-                headers: {
-                  'Authorization': `Bearer ${token}`,
-                  'Content-Type': 'application/json',
-                },
-                body: JSON.stringify(automationConfig),
-              },
-              5000
-            );
-            if (resp.ok) saved = true;
-          } catch (e) {
-            console.log('fetch failed:', e.message);
-          }
-        }
-      }
+      // 刷新自动化列表
+      await this._refreshAutomations();
 
-      if (saved) {
-        // For countdown mode, trigger immediately
-        if (mode === 'countdown') {
-          try {
-            await this._hass.callService('automation', 'trigger', {
-              entity_id: `automation.${autoId}`,
-              skip_condition: false,
-            });
-          } catch (e) {
-            console.log('Auto-trigger countdown failed:', e);
-          }
-        }
+      // 重置表单
+      this._formData = this._getDefaultFormData();
+      this._editingId = null;
+      this._render();
 
-        this._hass.callService('automation', 'reload');
-        this._closeDialog();
-        this._renderAutomationList();
-        return;
-      }
-
-      this._showYamlDialog(yamlText, autoName);
-
-    } catch (err) {
-      console.error('Save error:', err);
-      this._showYamlDialog(yamlText, autoName);
-    } finally {
-      if (saveBtn) {
-        saveBtn.textContent = mode === 'timer' ? '保存定时' : '启动倒计时';
-        saveBtn.style.opacity = '1';
-        saveBtn.disabled = false;
-      }
+    } catch (error) {
+      console.error('保存自动化失败:', error);
+      this._showToast('保存失败: ' + (error.message || '未知错误'), 'error');
     }
   }
 
-  _toYaml(config) {
-    let yaml = `- id: "${Date.now().toString().slice(-8)}"\n`;
-    yaml += `  alias: "${config.alias}"\n`;
-    yaml += `  description: "${config.description}"\n`;
-    yaml += `  trigger:\n`;
-    if (config.trigger && config.trigger.length > 0) {
-      config.trigger.forEach(t => {
-        yaml += `    - platform: ${t.platform}\n`;
-        if (t.at) yaml += `      at: "${t.at}"\n`;
-      });
-    } else {
-      yaml += `    []\n`;
+  /**
+   * 构建 Home Assistant 自动化配置对象
+   */
+  _buildAutomationConfig(name) {
+    const alias = name || this._formData.auto_name || '定时任务';
+    const entityId = 'automation.' + this._pinyin(alias);
+
+    const config = {
+      alias: alias,
+      description: 'Timer Editor Card 创建的自动化',
+    };
+
+    // 设置触发器
+    config.trigger = this._getTriggers();
+
+    // 设置条件
+    const conditions = this._getConditions();
+    if (conditions && conditions.length > 0) {
+      config.condition = conditions;
     }
-    yaml += `  condition:\n`;
-    if (config.condition && config.condition.length > 0) {
-      config.condition.forEach(c => {
-        if (c.condition === 'time' && c.weekday) {
-          yaml += `    - condition: time\n`;
-          yaml += `      weekday:\n`;
-          c.weekday.forEach(d => yaml += `        - ${d}\n`);
-        } else if (c.condition === 'state') {
-          yaml += `    - condition: state\n`;
-          yaml += `      entity_id: ${c.entity_id}\n`;
-          yaml += `      state: ${c.state}\n`;
+
+    // 设置动作
+    config.action = this._getActions();
+
+    // 设置模式（单次）
+    if (this._formData.once || this._formData.repeat === 'once') {
+      config.mode = 'single';
+    }
+
+    return config;
+  }
+
+  /**
+   * 获取触发器（兼容 HA 2024+）
+   * HA 2024+ 使用 trigger/action/condition 替代 trigger/service/condition
+   */
+  _getTriggers() {
+    if (this._formData.is_countdown) {
+      // 倒计时模式：使用延时触发器
+      const totalSeconds = (this._formData.countdown_hours || 0) * 3600 +
+                           (this._formData.countdown_minutes || 0) * 60 +
+                           (this._formData.countdown_seconds || 0);
+
+      // 倒计时需要手动触发
+      return [
+        {
+          trigger: 'numeric_state',
+          entity_id: this._formData.entity_id,
+          attribute: 'last_triggered',
+          above: 0,
+          below: 1,
+          for: {
+            hours: 0,
+            minutes: 0,
+            seconds: totalSeconds
+          }
         }
+      ];
+    }
+
+    // 定时模式：使用时间触发器
+    const triggers = [];
+
+    if (this._formData.repeat === 'once') {
+      // 仅一次
+      triggers.push({
+        trigger: 'time',
+        at: `${String(this._formData.hour).padStart(2, '0')}:${String(this._formData.minute).padStart(2, '0')}`
+      });
+    } else if (this._formData.repeat === 'weekday') {
+      // 工作日
+      triggers.push({
+        trigger: 'time',
+        at: `${String(this._formData.hour).padStart(2, '0')}:${String(this._formData.minute).padStart(2, '0')}`,
+        weekday: ['mon', 'tue', 'wed', 'thu', 'fri']
+      });
+    } else if (this._formData.repeat === 'weekend') {
+      // 周末
+      triggers.push({
+        trigger: 'time',
+        at: `${String(this._formData.hour).padStart(2, '0')}:${String(this._formData.minute).padStart(2, '0')}`,
+        weekday: ['sat', 'sun']
+      });
+    } else if (['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'].includes(this._formData.repeat)) {
+      // 特定星期几
+      triggers.push({
+        trigger: 'time',
+        at: `${String(this._formData.hour).padStart(2, '0')}:${String(this._formData.minute).padStart(2, '0')}`,
+        weekday: [this._formData.repeat]
       });
     } else {
-      yaml += `    []\n`;
+      // 每天
+      triggers.push({
+        trigger: 'time',
+        at: `${String(this._formData.hour).padStart(2, '0')}:${String(this._formData.minute).padStart(2, '0')}`
+      });
     }
-    yaml += `  action:\n`;
-    config.action.forEach(a => {
-      if (a.delay) {
-        yaml += `    - delay: "${a.delay}"\n`;
-      } else if (a.service) {
-        yaml += `    - service: ${a.service}\n`;
-        if (a.target?.entity_id) {
-          yaml += `      target:\n`;
-          yaml += `        entity_id: ${a.target.entity_id}\n`;
+
+    return triggers;
+  }
+
+  /**
+   * 获取条件（兼容 HA 2024+）
+   */
+  _getConditions() {
+    const conditions = [];
+
+    if (this._formData.condition === 'night_only') {
+      conditions.push({
+        condition: 'time',
+        after: '18:00:00',
+        before: '06:00:00'
+      });
+    } else if (this._formData.condition === 'day_only') {
+      conditions.push({
+        condition: 'time',
+        after: '06:00:00',
+        before: '18:00:00'
+      });
+    }
+
+    return conditions;
+  }
+
+  /**
+   * 获取动作（兼容 HA 2024+）
+   */
+  _getActions() {
+    // 如果选择了场景，优先执行场景
+    if (this._formData.scene_id) {
+      return [
+        {
+          action: 'scene.turn_on',
+          target: {
+            entity_id: this._formData.scene_id
+          }
+        }
+      ];
+    }
+
+    // 否则执行实体动作
+    return [
+      {
+        action: `homeassistant.${this._formData.action || 'turn_on'}`,
+        target: {
+          entity_id: this._formData.entity_id
         }
       }
+    ];
+  }
+
+  /**
+   * 删除自动化
+   */
+  async _deleteAutomation(id) {
+    if (!confirm('确定要删除这个自动化吗？')) return;
+
+    const auto = this._automations.find(a => a.id === id);
+    if (!auto) return;
+
+    try {
+      if (auto.config_id) {
+        await this._hass.callApi('DELETE', `/api/config/automation/config/${auto.config_id}`);
+      }
+      this._automations = this._automations.filter(a => a.id !== id);
+
+      // 如果正在编辑被删除的自动化，取消编辑
+      if (this._editingId === id) {
+        this._cancelEdit();
+      }
+
+      this._showToast('自动化已删除', 'success');
+      this._render();
+    } catch (error) {
+      console.error('删除自动化失败:', error);
+      this._showToast('删除失败: ' + (error.message || '未知错误'), 'error');
+    }
+  }
+
+  /**
+   * 切换自动化启用/禁用
+   */
+  async _toggleAutomation(auto) {
+    try {
+      const service = auto.state === 'on' ? 'turn_off' : 'turn_on';
+      await this._hass.callService('automation', service, {
+        entity_id: auto.entity_id
+      });
+      auto.state = auto.state === 'on' ? 'off' : 'on';
+      this._showToast(`自动化已${auto.state === 'on' ? '启用' : '禁用'}`, 'info');
+      this._render();
+    } catch (error) {
+      console.error('切换自动化失败:', error);
+      this._showToast('操作失败', 'error');
+    }
+  }
+
+  /**
+   * 编辑自动化
+   */
+  _editAutomation(auto) {
+    this._editingId = auto.id;
+    this._formData = {
+      enabled: auto.state !== 'off',
+      name: auto.alias || auto.name || '',
+      entity_id: auto.entity || '',
+      action: auto.action || 'turn_on',
+      repeat: auto.repeat || 'daily',
+      hour: auto.hour || '',
+      minute: auto.minute || '',
+      scene_id: auto.scene_id || '',
+      auto_name: auto.alias || auto.name || '',
+      condition: auto.condition || 'none',
+      is_countdown: auto.is_countdown || false,
+      countdown_hours: auto.countdown_hours || 0,
+      countdown_minutes: auto.countdown_minutes || 0,
+      countdown_seconds: auto.countdown_seconds || 0,
+      once: auto.once || false
+    };
+
+    // 确保定时区段展开
+    this._sectionsOpen.timer = true;
+
+    this._render();
+  }
+
+  /**
+   * 取消编辑
+   */
+  _cancelEdit() {
+    this._editingId = null;
+    this._formData = this._getDefaultFormData();
+    this._render();
+  }
+
+  /**
+   * 保存卡片配置
+   */
+  _saveCard() {
+    this._showToast('卡片配置已保存', 'success');
+    // 触发 HA 的 card 更新事件
+    const event = new Event('config-changed', { bubbles: true, composed: true });
+    event.detail = { config: this._config };
+    this.dispatchEvent(event);
+  }
+
+  /**
+   * 显示 YAML 代码编辑器
+   */
+  _showCodeEditor() {
+    this._codeEditorVisible = !this._codeEditorVisible;
+
+    // 查找底部操作栏之前的位置插入代码编辑器
+    const bottomBar = this.shadowRoot.querySelector('.tec-bottom-bar');
+    if (!bottomBar) return;
+
+    // 移除已有的代码编辑器
+    const existing = this.shadowRoot.querySelector('.tec-code-editor');
+    if (existing) {
+      existing.remove();
+    }
+
+    if (this._codeEditorVisible) {
+      const editorWrap = document.createElement('div');
+      editorWrap.className = 'tec-code-editor';
+
+      const editorHeader = document.createElement('div');
+      editorHeader.className = 'tec-code-editor-header';
+
+      const editorTitle = document.createElement('span');
+      editorTitle.textContent = 'YAML 自动化配置';
+
+      const closeBtn = document.createElement('span');
+      closeBtn.className = 'tec-code-editor-close';
+      closeBtn.innerHTML = '&times;';
+      closeBtn.addEventListener('click', () => {
+        this._codeEditorVisible = false;
+        const ed = this.shadowRoot.querySelector('.tec-code-editor');
+        if (ed) ed.remove();
+      });
+
+      editorHeader.appendChild(editorTitle);
+      editorHeader.appendChild(closeBtn);
+
+      const textarea = document.createElement('textarea');
+      textarea.className = 'tec-code-editor-textarea';
+      textarea.value = this._toYaml();
+
+      // 应用YAML更改按钮
+      const applyWrap = document.createElement('div');
+      applyWrap.style.cssText = 'padding:8px 12px;background:#1e1e1e;display:flex;gap:8px;justify-content:flex-end;';
+
+      const applyBtn = document.createElement('button');
+      applyBtn.style.cssText = 'padding:6px 16px;border-radius:8px;border:none;background:var(--tec-orange-gradient);color:white;font-size:13px;cursor:pointer;';
+      applyBtn.textContent = '应用更改';
+      applyBtn.addEventListener('click', () => {
+        this._showToast('YAML 配置已应用（仅显示）', 'info');
+      });
+
+      const copyBtn = document.createElement('button');
+      copyBtn.style.cssText = 'padding:6px 16px;border-radius:8px;border:1px solid #444;background:transparent;color:#d4d4d4;font-size:13px;cursor:pointer;';
+      copyBtn.textContent = '复制';
+      copyBtn.addEventListener('click', () => {
+        navigator.clipboard.writeText(textarea.value).then(() => {
+          this._showToast('已复制到剪贴板', 'success');
+        }).catch(() => {
+          this._showToast('复制失败', 'error');
+        });
+      });
+
+      applyWrap.appendChild(copyBtn);
+      applyWrap.appendChild(applyBtn);
+
+      editorWrap.appendChild(editorHeader);
+      editorWrap.appendChild(textarea);
+      editorWrap.appendChild(applyWrap);
+
+      // 插入到底部操作栏之前
+      bottomBar.parentNode.insertBefore(editorWrap, bottomBar);
+    }
+  }
+
+  /**
+   * 转换为 YAML 格式（简化版，不依赖 js-yaml 库）
+   */
+  _toYaml() {
+    let yaml = '# Timer Editor Card - 自动化配置 YAML\n\n';
+
+    if (this._automations.length === 0) {
+      yaml += '# 暂无自动化配置\n';
+      yaml += '# 请在上方表单中创建自动化\n';
+      return yaml;
+    }
+
+    this._automations.forEach((auto, index) => {
+      yaml += `- id: ${auto.config_id || 'auto_' + (index + 1)}\n`;
+      yaml += `  alias: ${auto.alias || auto.name || '未命名'}\n`;
+      yaml += `  description: 定时编辑器创建的自动化\n`;
+      yaml += `  trigger:\n`;
+      yaml += `    - trigger: time\n`;
+      yaml += `      at: "${String(auto.hour || '00').padStart(2, '0')}:${String(auto.minute || '00').padStart(2, '0')}"\n`;
+      if (auto.repeat && auto.repeat !== 'daily') {
+        if (['weekday', 'weekend', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'].includes(auto.repeat)) {
+          const weekdayMap = {
+            weekday: ['mon', 'tue', 'wed', 'thu', 'fri'],
+            weekend: ['sat', 'sun']
+          };
+          const days = weekdayMap[auto.repeat] || [auto.repeat];
+          yaml += `      weekday:\n`;
+          days.forEach(d => { yaml += `        - ${d}\n`; });
+        }
+      }
+      yaml += `  action:\n`;
+      if (auto.scene_id) {
+        yaml += `    - action: scene.turn_on\n`;
+        yaml += `      target:\n`;
+        yaml += `        entity_id: ${auto.scene_id}\n`;
+      } else {
+        yaml += `    - action: homeassistant.${auto.action || 'turn_on'}\n`;
+        yaml += `      target:\n`;
+        yaml += `        entity_id: ${auto.entity || ''}\n`;
+      }
+      if (auto.condition && auto.condition !== 'none') {
+        yaml += `  condition:\n`;
+        yaml += `    - condition: time\n`;
+        if (auto.condition === 'night_only') {
+          yaml += `      after: "18:00:00"\n`;
+          yaml += `      before: "06:00:00"\n`;
+        } else if (auto.condition === 'day_only') {
+          yaml += `      after: "06:00:00"\n`;
+          yaml += `      before: "18:00:00"\n`;
+        }
+      }
+      yaml += '\n';
     });
-    yaml += `  mode: single\n`;
+
     return yaml;
   }
 
-  _showYamlDialog(yamlText, autoName) {
-    const overlay = document.createElement('div');
-    overlay.style.cssText = `
-      position: fixed; top: 0; left: 0; right: 0; bottom: 0;
-      background: rgba(0,0,0,0.6); z-index: 10001;
-      display: flex; align-items: center; justify-content: center;
-      padding: 16px;
-    `;
+  /**
+   * 获取定时相关的自动化列表
+   */
+  _getTimerAutomations() {
+    if (!this._hass) return [];
 
-    const box = document.createElement('div');
-    box.style.cssText = `
-      background: #ffffff; border-radius: 16px; width: 100%; max-width: 420px;
-      max-height: 80vh; overflow-y: auto;
-    `;
+    const automations = [];
+    Object.values(this._hass.states).forEach(entity => {
+      if (entity.entity_id.startsWith('automation.')) {
+        // 检查是否是本卡片创建的自动化（通过 description 或 alias 判断）
+        const desc = entity.attributes.description || '';
+        const alias = entity.attributes.friendly_name || '';
 
-    box.innerHTML = `
-      <div style="padding: 16px 20px; border-bottom: 1px solid #f0f0f0;">
-        <div style="font-size: 17px; font-weight: 600;">保存方式</div>
-        <div style="font-size: 13px; color: #888; margin-top: 4px;">API 保存失败，请手动添加以下 YAML</div>
-      </div>
-      <div style="padding: 16px;">
-        <textarea id="yaml-output" readonly style="width: 100%; height: 200px; border: 1px solid #e0e0e0; border-radius: 10px; padding: 12px; font-family: monospace; font-size: 13px; resize: none; background: #f8f8f8;">${this._escapeHtml(yamlText)}</textarea>
-        <button id="yaml-copy" style="width: 100%; margin-top: 12px; padding: 12px; border-radius: 12px; border: none; background: linear-gradient(135deg, #f59e0b, #f97316); color: #fff; font-size: 15px; font-weight: 600; cursor: pointer;">复制 YAML</button>
-        <div style="font-size: 12px; color: #888; margin-top: 12px; line-height: 1.5;">
-          <b>恢复模式修复提示：</b><br>
-          如果 HA 进入恢复模式，请检查：<br>
-          1. configuration.yaml 的缩进是否正确<br>
-          2. automations.yaml 是否有语法错误<br>
-          3. themes/*.yaml 是否引入了无效字符<br>
-          4. 查看设置 → 系统 → 日志 获取详细错误
-        </div>
-      </div>
-      <div style="padding: 0 16px 16px;">
-        <button id="yaml-close" style="width: 100%; padding: 12px; border-radius: 12px; border: 1px solid #e0e0e0; background: #fff; color: #666; font-size: 15px; cursor: pointer;">关闭</button>
-      </div>
-    `;
+        if (desc.includes('Timer Editor') || alias.includes('timer')) {
+          automations.push(this._parseAutomation(entity));
+        }
+      }
+    });
 
-    overlay.appendChild(box);
-    document.body.appendChild(overlay);
+    return automations;
+  }
 
-    box.querySelector('#yaml-close').addEventListener('click', () => overlay.remove());
-    box.querySelector('#yaml-copy').addEventListener('click', () => {
-      const textarea = box.querySelector('#yaml-output');
-      textarea.select();
-      document.execCommand('copy');
-      alert('YAML 已复制到剪贴板');
+  /**
+   * 解析 HA 自动化实体为内部格式
+   */
+  _parseAutomation(entity) {
+    const triggers = entity.attributes.triggers || [];
+    const actions = entity.attributes.actions || [];
+    const conditions = entity.attributes.conditions || [];
+
+    // 解析时间触发器
+    let hour = '', minute = '', repeat = 'daily', is_countdown = false;
+    let countdown_hours = 0, countdown_minutes = 0, countdown_seconds = 0;
+
+    if (triggers.length > 0) {
+      const trigger = triggers[0];
+      if (trigger.trigger === 'time') {
+        const at = trigger.at || '';
+        const timeParts = at.split(':');
+        hour = parseInt(timeParts[0]) || 0;
+        minute = parseInt(timeParts[1]) || 0;
+
+        if (trigger.weekday) {
+          const wd = trigger.weekday;
+          if (wd.length === 5 && wd.includes('mon') && wd.includes('fri')) {
+            repeat = 'weekday';
+          } else if (wd.length === 2 && wd.includes('sat') && wd.includes('sun')) {
+            repeat = 'weekend';
+          } else if (wd.length === 1) {
+            repeat = wd[0];
+          }
+        }
+      }
+    }
+
+    // 解析动作
+    let action = 'turn_on', entityId = '', scene_id = '';
+    if (actions.length > 0) {
+      const act = actions[0];
+      if (act.action) {
+        if (act.action.startsWith('scene.')) {
+          scene_id = (act.target && act.target.entity_id) ? act.target.entity_id[0] : '';
+          action = 'scene';
+        } else if (act.action.includes('turn_on')) {
+          action = 'turn_on';
+          entityId = (act.target && act.target.entity_id) ? act.target.entity_id[0] : '';
+        } else if (act.action.includes('turn_off')) {
+          action = 'turn_off';
+          entityId = (act.target && act.target.entity_id) ? act.target.entity_id[0] : '';
+        } else if (act.action.includes('toggle')) {
+          action = 'toggle';
+          entityId = (act.target && act.target.entity_id) ? act.target.entity_id[0] : '';
+        }
+      }
+    }
+
+    // 解析条件
+    let condition = 'none';
+    if (conditions.length > 0) {
+      const cond = conditions[0];
+      if (cond.condition === 'time') {
+        if (cond.after && cond.after.startsWith('18') && cond.before && cond.before.startsWith('06')) {
+          condition = 'night_only';
+        } else if (cond.after && cond.after.startsWith('06') && cond.before && cond.before.startsWith('18')) {
+          condition = 'day_only';
+        }
+      }
+    }
+
+    return {
+      id: entity.entity_id,
+      config_id: entity.attributes.id || '',
+      entity_id: entity.entity_id,
+      alias: entity.attributes.friendly_name || '',
+      name: entity.attributes.friendly_name || '',
+      state: entity.state,
+      entity: entityId,
+      action: action,
+      repeat: repeat,
+      hour: hour,
+      minute: minute,
+      scene_id: scene_id,
+      condition: condition,
+      is_countdown: is_countdown,
+      countdown_hours: countdown_hours,
+      countdown_minutes: countdown_minutes,
+      countdown_seconds: countdown_seconds,
+      once: entity.attributes.mode === 'single'
+    };
+  }
+
+  /**
+   * 刷新自动化列表
+   */
+  async _refreshAutomations() {
+    try {
+      // 通过 REST API 获取所有自动化配置
+      const configs = await this._hass.callApi('GET', '/api/config/automation/config');
+
+      this._automations = configs.map(cfg => {
+        // 解析触发器
+        const triggers = cfg.trigger || [];
+        let hour = '', minute = '', repeat = 'daily';
+
+        triggers.forEach(trigger => {
+          if (trigger.trigger === 'time' && trigger.at) {
+            const parts = trigger.at.split(':');
+            hour = parseInt(parts[0]) || 0;
+            minute = parseInt(parts[1]) || 0;
+          }
+          if (trigger.trigger === 'time' && trigger.weekday) {
+            const wd = trigger.weekday;
+            if (wd.length === 5) repeat = 'weekday';
+            else if (wd.length === 2) repeat = 'weekend';
+            else if (wd.length === 1) repeat = wd[0];
+          }
+        });
+
+        // 解析动作
+        const actions = cfg.action || [];
+        let action = 'turn_on', entityId = '', scene_id = '';
+
+        actions.forEach(act => {
+          if (act.action && act.action.startsWith('scene.')) {
+            scene_id = (act.target && act.target.entity_id) ? (Array.isArray(act.target.entity_id) ? act.target.entity_id[0] : act.target.entity_id) : '';
+            action = 'scene';
+          } else if (act.action) {
+            if (act.action.includes('turn_on')) action = 'turn_on';
+            else if (act.action.includes('turn_off')) action = 'turn_off';
+            else if (act.action.includes('toggle')) action = 'toggle';
+            entityId = (act.target && act.target.entity_id) ? (Array.isArray(act.target.entity_id) ? act.target.entity_id[0] : act.target.entity_id) : '';
+          }
+        });
+
+        // 解析条件
+        const conditions = cfg.condition || [];
+        let condition = 'none';
+        conditions.forEach(cond => {
+          if (cond.condition === 'time') {
+            if (cond.after === '18:00:00') condition = 'night_only';
+            else if (cond.after === '06:00:00') condition = 'day_only';
+          }
+        });
+
+        // 获取当前状态
+        const stateObj = this._hass.states['automation.' + this._pinyin(cfg.alias || '')] || {};
+
+        return {
+          id: 'auto_' + cfg.id,
+          config_id: cfg.id,
+          entity_id: 'automation.' + this._pinyin(cfg.alias || ''),
+          alias: cfg.alias || '',
+          name: cfg.alias || '',
+          state: stateObj.state || 'off',
+          entity: entityId,
+          action: action,
+          repeat: repeat,
+          hour: hour,
+          minute: minute,
+          scene_id: scene_id,
+          condition: condition,
+          is_countdown: false,
+          countdown_hours: 0,
+          countdown_minutes: 0,
+          countdown_seconds: 0,
+          once: cfg.mode === 'single'
+        };
+      });
+
+    } catch (error) {
+      console.error('刷新自动化列表失败:', error);
+      // 回退到通过 hass.states 获取
+      this._automations = this._getTimerAutomations();
+    }
+  }
+
+  /**
+   * 更新自动化状态（从 hass.states）
+   */
+  _updateAutomationStates() {
+    if (!this._hass || this._automations.length === 0) return;
+
+    this._automations.forEach(auto => {
+      const stateObj = this._hass.states[auto.entity_id];
+      if (stateObj) {
+        auto.state = stateObj.state;
+      }
     });
   }
 
-  async _deleteAutomation() {
-    if (!this._editingEntityId || !this._hass) return;
-    if (!confirm('确定要删除这个定时任务吗？')) return;
+  /**
+   * 生成自动化名称
+   */
+  _generateAutoName() {
+    const entity = this._formData.entity_id || 'timer';
+    const entityName = entity.split('.').pop() || 'timer';
 
-    const autoId = this._editingEntityId.replace('automation.', '');
-    let deleted = false;
-
-    // Method 1: REST API DELETE
-    const token = this._hass.auth?.accessToken || this._hass.auth?.data?.access_token;
-    if (token) {
-      try {
-        const resp = await fetch(`/api/config/automation/config/${autoId}`, {
-          method: 'DELETE',
-          headers: { 'Authorization': `Bearer ${token}` },
-        });
-        if (resp.ok || resp.status === 404) deleted = true;
-      } catch (e) {
-        console.log('DELETE failed:', e);
-      }
-    }
-
-    if (!deleted && this._hass.fetchWithAuth) {
-      try {
-        const resp = await this._hass.fetchWithAuth(`/api/config/automation/config/${autoId}`, { method: 'DELETE' });
-        if (resp.ok || resp.status === 404) deleted = true;
-      } catch (e) {
-        console.log('fetchWithAuth DELETE failed:', e);
-      }
-    }
-
-    if (deleted) {
-      this._hass.callService('automation', 'reload');
-      this._closeDialog();
-      this._renderAutomationList();
+    let timeStr = '';
+    if (this._formData.is_countdown) {
+      const h = this._formData.countdown_hours || 0;
+      const m = this._formData.countdown_minutes || 0;
+      const s = this._formData.countdown_seconds || 0;
+      timeStr = `倒计时${h}时${m}分${s}秒`;
     } else {
-      alert('删除失败，请手动在 设置 > 自动化与场景 中删除');
+      const h = String(this._formData.hour || '00').padStart(2, '0');
+      const m = String(this._formData.minute || '00').padStart(2, '0');
+      timeStr = `${h}:${m}`;
     }
+
+    const repeatMap = {
+      'daily': '每天', 'weekday': '工作日', 'weekend': '周末',
+      'once': '单次', 'mon': '周一', 'tue': '周二', 'wed': '周三',
+      'thu': '周四', 'fri': '周五', 'sat': '周六', 'sun': '周日'
+    };
+    const repeatStr = repeatMap[this._formData.repeat] || '';
+
+    return `${entityName} ${timeStr} ${repeatStr}`.trim();
   }
 
-  _closeDialog() {
-    if (this._dialog) {
-      this._dialog.style.opacity = '0';
-      this._dialog.style.transition = 'opacity 0.2s';
-      setTimeout(() => {
-        this._dialog?.remove();
-        this._dialog = null;
-      }, 200);
-    }
+  /**
+   * 生成实体ID（使用拼音）
+   */
+  _generateEntityId(name) {
+    return 'automation.' + this._pinyin(name || 'timer');
   }
 
-  _escapeHtml(text) {
+  /**
+   * 简易中文转拼音（用于生成实体ID）
+   * 实际使用中建议引入完整的拼音库
+   */
+  _pinyin(str) {
+    if (!str) return 'timer';
+
+    // 常用中文字符映射
+    const map = {
+      '定': 'ding', '时': 'shi', '器': 'qi', '打': 'da', '开': 'kai',
+      '关': 'guan', '切': 'qie', '换': 'huan', '每': 'mei', '天': 'tian',
+      '早': 'zao', '晚': 'wan', '上': 'shang', '下': 'xia', '午': 'wu',
+      '回': 'hui', '家': 'jia', '离': 'li', '睡': 'shui', '眠': 'mian',
+      '起': 'qi', '床': 'chuang', '模': 'mo', '式': 'shi', '倒': 'dao',
+      '计': 'ji', '数': 'shu', '工': 'gong', '作': 'zuo', '日': 'ri',
+      '周': 'zhou', '一': 'yi', '二': 'er', '三': 'san', '四': 'si',
+      '五': 'wu', '六': 'liu', '七': 'qi', '八': 'ba', '九': 'jiu',
+      '十': 'shi', '零': 'ling', '灯': 'deng', '光': 'guang', '自': 'zi',
+      '动': 'dong', '化': 'hua', '卧': 'wo', '室': 'shi', '客': 'ke',
+      '厅': 'ting', '厨': 'chu', '房': 'fang', '卫': 'wei', '生': 'sheng',
+      '间': 'jian', '阳': 'yang', '台': 'tai', '夜': 'ye', '影': 'ying',
+      '院': 'yuan', '场': 'chang', '空': 'kong', '调': 'tiao', '插': 'cha',
+      '座': 'zuo', '开': 'kai', '关': 'guan', '窗': 'chuang', '帘': 'lian',
+      '门': 'men', '锁': 'suo', '摄': 'she', '像': 'xiang', '头': 'tou',
+      '扫': 'sao', '地': 'di', '机': 'ji', '洗': 'xi', '衣': 'yi',
+      '冰': 'bing', '箱': 'xiang', '电': 'dian', '视': 'shi', '音': 'yin',
+      '响': 'xiang', '风': 'feng', '扇': 'shan', '加': 'jia', '热': 're',
+      '器': 'qi'
+    };
+
+    let result = '';
+    for (let i = 0; i < str.length; i++) {
+      const ch = str[i];
+      if (map[ch]) {
+        result += map[ch] + '_';
+      } else if (/[a-zA-Z0-9_]/.test(ch)) {
+        result += ch.toLowerCase();
+      } else if (/\s/.test(ch)) {
+        result += '_';
+      }
+      // 忽略其他字符
+    }
+
+    // 清理结果
+    result = result.replace(/_+/g, '_').replace(/^_|_$/g, '');
+    return result || 'timer';
+  }
+
+  /**
+   * HTML 转义
+   */
+  _escapeHtml(str) {
+    if (!str) return '';
     const div = document.createElement('div');
-    div.textContent = text;
+    div.textContent = str;
     return div.innerHTML;
   }
 
-  getCardSize() {
-    return 2;
+  /**
+   * 显示 Toast 提示
+   */
+  _showToast(message, type) {
+    // 移除已有 toast
+    const existing = document.querySelector('.tec-toast');
+    if (existing) existing.remove();
+
+    const toast = document.createElement('div');
+    toast.className = 'tec-toast ' + (type || 'info');
+    toast.textContent = message;
+    document.body.appendChild(toast);
+
+    // 3秒后自动移除
+    setTimeout(() => {
+      if (toast.parentNode) toast.remove();
+    }, 3000);
   }
 }
 
-// Register the card
-customElements.define('timer-editor-card', TimerEditorCard);
+// 注册自定义元素
+if (!customElements.get('timer-editor-card')) {
+  customElements.define('timer-editor-card', TimerEditorCard);
+}
 
-// Add to card picker
-window.customCards = window.customCards || [];
-window.customCards.push({
-  type: 'timer-editor-card',
-  name: '定时编辑器',
-  description: '创建和管理定时自动化任务（支持倒计时）',
-  preview: false,
-});
+// ========== 卡片配置编辑器 ==========
+class TimerEditorCardEditor extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: 'open' });
+  }
 
-console.info(
-  '%c TIMER-EDITOR-CARD %c v1.4.0 ',
-  'color: white; background: #f59e0b; font-weight: 700;',
-  'color: #f59e0b; background: #fff; font-weight: 700;'
-);
+  setConfig(config) {
+    this._config = config;
+    this._render();
+  }
+
+  _render() {
+    this.shadowRoot.innerHTML = '';
+
+    const style = document.createElement('style');
+    style.textContent = `
+      .editor { padding: 16px; }
+      .editor-row { margin-bottom: 12px; }
+      .editor-label { display: block; font-size: 12px; font-weight: 600; color: #888; margin-bottom: 4px; }
+      .editor-input { width: 100%; padding: 8px 12px; border: 1px solid #e0e0e0; border-radius: 10px; font-size: 14px; box-sizing: border-box; outline: none; }
+      .editor-input:focus { border-color: #FF9500; box-shadow: 0 0 0 3px rgba(255,149,0,0.15); }
+    `;
+    this.shadowRoot.appendChild(style);
+
+    const editor = document.createElement('div');
+    editor.className = 'editor';
+
+    // 标题
+    const titleRow = document.createElement('div');
+    titleRow.className = 'editor-row';
+    const titleLabel = document.createElement('label');
+    titleLabel.className = 'editor-label';
+    titleLabel.textContent = '卡片标题';
+    const titleInput = document.createElement('input');
+    titleInput.className = 'editor-input';
+    titleInput.type = 'text';
+    titleInput.value = this._config.title || '定时编辑器';
+    titleInput.addEventListener('change', () => {
+      this._config.title = titleInput.value;
+      this._fireChanged();
+    });
+    titleRow.appendChild(titleLabel);
+    titleRow.appendChild(titleInput);
+    editor.appendChild(titleRow);
+
+    // 卡片ID
+    const idRow = document.createElement('div');
+    idRow.className = 'editor-row';
+    const idLabel = document.createElement('label');
+    idLabel.className = 'editor-label';
+    idLabel.textContent = '卡片ID';
+    const idInput = document.createElement('input');
+    idInput.className = 'editor-input';
+    idInput.type = 'text';
+    idInput.value = this._config.card_id || 'timer_card_1';
+    idInput.addEventListener('change', () => {
+      this._config.card_id = idInput.value;
+      this._fireChanged();
+    });
+    idRow.appendChild(idLabel);
+    idRow.appendChild(idInput);
+    editor.appendChild(idRow);
+
+    // 图标
+    const iconRow = document.createElement('div');
+    iconRow.className = 'editor-row';
+    const iconLabel = document.createElement('label');
+    iconLabel.className = 'editor-label';
+    iconLabel.textContent = '图标（MDI）';
+    const iconInput = document.createElement('input');
+    iconInput.className = 'editor-input';
+    iconInput.type = 'text';
+    iconInput.value = this._config.icon || 'mdi:timer-outline';
+    iconInput.addEventListener('change', () => {
+      this._config.icon = iconInput.value;
+      this._fireChanged();
+    });
+    iconRow.appendChild(iconLabel);
+    iconRow.appendChild(iconInput);
+    editor.appendChild(iconRow);
+
+    this.shadowRoot.appendChild(editor);
+  }
+
+  _fireChanged() {
+    const event = new Event('config-changed', { bubbles: true, composed: true });
+    event.detail = { config: this._config };
+    this.dispatchEvent(event);
+  }
+}
+
+if (!customElements.get('timer-editor-card-editor')) {
+  customElements.define('timer-editor-card-editor', TimerEditorCardEditor);
+}
+
+console.info('%c Timer Editor Card v2.0.0 %c 已加载', 'background:#FF9500;color:white;border-radius:4px;padding:2px 6px;', 'color:#FF9500;');
