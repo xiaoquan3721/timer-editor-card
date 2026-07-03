@@ -1,7 +1,7 @@
 /**
  * Timer Editor Card for Home Assistant
  * A custom Lovelace card for creating time-based automations with a beautiful UI
- * Version: 1.2.1
+ * Version: 1.4.0
  */
 
 class TimerEditorCard extends HTMLElement {
@@ -17,6 +17,10 @@ class TimerEditorCard extends HTMLElement {
       repeat: 'once',
       hour: 19,
       minute: 30,
+      mode: 'timer',
+      countdown_minutes: 30,
+      condition: 'none',
+      single_use: false,
       automation_name: '',
       custom_text: '',
     };
@@ -97,7 +101,7 @@ class TimerEditorCard extends HTMLElement {
     titleArea.style.flex = '1';
     titleArea.innerHTML = `
       <div style="font-size: 16px; font-weight: 600; color: var(--primary-text-color, #333);">${this._config.title || '定时编辑'}</div>
-      <div style="font-size: 13px; color: var(--secondary-text-color, #999); margin-top: 2px;">点击添加定时任务</div>
+      <div style="font-size: 13px; color: var(--secondary-text-color, #999); margin-top: 2px;">点击添加定时或倒计时任务</div>
     `;
 
     const arrow = document.createElement('div');
@@ -133,14 +137,18 @@ class TimerEditorCard extends HTMLElement {
         const friendlyName = auto.attributes?.friendly_name || auto.entity_id;
         const isActive = auto.state === 'on';
 
-        // Get target entity info (HA 2024+ uses 'actions', old uses 'action')
         const actions = this._getActions(auto);
         const action = actions[0] || {};
         const targetEntityId = action.target?.entity_id || action.entity_id || '';
         const targetState = this._hass?.states[targetEntityId];
         const targetName = targetState?.attributes?.friendly_name || targetEntityId;
         const domain = targetEntityId.split('.')[0];
-        const domainIcon = { switch: 'mdi:power-socket', light: 'mdi:lightbulb-outline', fan: 'mdi:fan', climate: 'mdi:thermostat', scene: 'mdi:palette', script: 'mdi:script-text' }[domain] || 'mdi:timer-outline';
+        const domainIcon = { switch: 'mdi:power-socket', light: 'mdi:lightbulb-outline', fan: 'mdi:fan', climate: 'mdi:thermostat', scene: 'mdi:palette', script: 'mdi:script-text', cover: 'mdi:window-shutter', input_boolean: 'mdi:toggle-switch' }[domain] || 'mdi:timer-outline';
+
+        // Check if countdown mode
+        const triggers = this._getTriggers(auto);
+        const isCountdown = triggers.length === 0;
+        const countdownBadge = isCountdown ? '<span style="margin-left: 6px; padding: 2px 8px; border-radius: 6px; background: linear-gradient(135deg, #f59e0b, #f97316); color: white; font-size: 11px; font-weight: 600;">倒计时</span>' : '';
 
         const item = document.createElement('div');
         item.style.cssText = `
@@ -156,7 +164,6 @@ class TimerEditorCard extends HTMLElement {
         item.addEventListener('mouseenter', () => item.style.background = 'var(--state-icon-active-color, #e8e8e8)');
         item.addEventListener('mouseleave', () => item.style.background = 'var(--ha-card-background, #f5f5f5)');
 
-        // Left: device icon
         const iconBox = document.createElement('div');
         iconBox.style.cssText = `
           width: 40px; height: 40px; border-radius: 10px;
@@ -166,15 +173,13 @@ class TimerEditorCard extends HTMLElement {
         `;
         iconBox.innerHTML = `<ha-icon icon="${domainIcon}" style="font-size: 20px;"></ha-icon>`;
 
-        // Middle: task info
         const info = document.createElement('div');
         info.style.cssText = 'flex: 1; min-width: 0;';
         info.innerHTML = `
-          <div style="font-size: 15px; font-weight: 600; color: var(--primary-text-color, #333); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${friendlyName}</div>
+          <div style="font-size: 15px; font-weight: 600; color: var(--primary-text-color, #333); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; align-items: center;">${friendlyName}${countdownBadge}</div>
           <div style="font-size: 12px; color: var(--secondary-text-color, #888); margin-top: 3px; line-height: 1.4;">${trigger}</div>
         `;
 
-        // Right: toggle switch
         const toggleWrap = document.createElement('div');
         toggleWrap.style.cssText = 'flex-shrink: 0; margin-left: 8px;';
 
@@ -204,7 +209,6 @@ class TimerEditorCard extends HTMLElement {
         item.appendChild(info);
         item.appendChild(toggleWrap);
 
-        // Click item body to edit
         item.addEventListener('click', (e) => {
           if (e.target === toggle || e.target === knob) return;
           this._editAutomation(auto);
@@ -220,7 +224,6 @@ class TimerEditorCard extends HTMLElement {
     const newState = auto.state === 'on' ? 'off' : 'on';
     try {
       await this._hass.callService('automation', 'toggle', { entity_id: auto.entity_id });
-      // Update UI immediately
       if (newState === 'on') {
         toggleEl.style.background = '#f59e0b';
         knobEl.style.left = '24px';
@@ -234,17 +237,14 @@ class TimerEditorCard extends HTMLElement {
   }
 
   _getTriggers(auto) {
-    // HA 2024+ uses 'triggers' (plural), older versions use 'trigger'
     return auto.attributes?.triggers || auto.attributes?.trigger || [];
   }
 
   _getActions(auto) {
-    // HA 2024+ uses 'actions' (plural), older versions use 'action'
     return auto.attributes?.actions || auto.attributes?.action || [];
   }
 
   _getConditions(auto) {
-    // HA 2024+ uses 'conditions' (plural), older versions use 'condition'
     return auto.attributes?.conditions || auto.attributes?.condition || [];
   }
 
@@ -253,11 +253,15 @@ class TimerEditorCard extends HTMLElement {
     return Object.values(this._hass.states)
       .filter(s => s.entity_id.startsWith('automation.'))
       .filter(s => {
-        // Show automations tagged by timer_editor, or those with time trigger
         if (s.attributes?.timer_editor === true) return true;
+        if (s.attributes?.timer_editor_card === true) return true;
         const triggers = this._getTriggers(s);
         const hasTimeTrigger = triggers.some(t => t.platform === 'time' && t.at);
         if (hasTimeTrigger) return true;
+        // Countdown automations have empty triggers but timer_editor tag
+        const actions = this._getActions(s);
+        const hasDelay = actions.some(a => a.delay || (typeof a === 'object' && a.delay !== undefined));
+        if (hasDelay && triggers.length === 0) return true;
         return false;
       });
   }
@@ -267,21 +271,30 @@ class TimerEditorCard extends HTMLElement {
     const actions = this._getActions(auto);
     const action = actions[0] || {};
 
-    if (triggers.length === 0) return '手动触发';
-    const t = triggers[0];
+    if (triggers.length === 0) {
+      const hasDelay = actions.some(a => a.delay || (typeof a === 'object' && a.delay !== undefined));
+      if (hasDelay) {
+        const delayAction = actions.find(a => a.delay || (typeof a === 'object' && a.delay !== undefined));
+        const delayText = delayAction ? this._formatDelay(delayAction.delay) : '';
+        const realAction = actions.find(a => a.service && !a.delay) || {};
+        const serviceMap = { 'homeassistant.turn_on': '开启', 'homeassistant.turn_off': '关闭', 'homeassistant.toggle': '切换' };
+        const actionText = serviceMap[realAction.service] || '执行';
+        const targetEntityId = realAction.target?.entity_id || realAction.entity_id || '';
+        const targetName = this._hass?.states[targetEntityId]?.attributes?.friendly_name || '';
+        return `倒计时 ${delayText}, ${actionText}${targetName ? ' ' + targetName : ''}`;
+      }
+      return '手动触发';
+    }
 
-    // Get action text
+    const t = triggers[0];
     const serviceMap = {
       'homeassistant.turn_on': '开启',
       'homeassistant.turn_off': '关闭',
       'homeassistant.toggle': '切换',
     };
     const actionText = serviceMap[action.service] || '执行';
-
-    // Get target entity name
     const targetEntityId = action.target?.entity_id || action.entity_id || '';
-    const targetState = this._hass?.states[targetEntityId];
-    const targetName = targetState?.attributes?.friendly_name || '';
+    const targetName = this._hass?.states[targetEntityId]?.attributes?.friendly_name || '';
 
     if (t.platform === 'time' && t.at) {
       const parts = t.at.split(':');
@@ -297,12 +310,32 @@ class TimerEditorCard extends HTMLElement {
         const repeatText = `周${days}`;
         return `${repeatText}, ${timeStr}, ${actionText}${targetName ? ' ' + targetName : ''}`;
       }
-      return `每天 ${timeStr}, ${actionText}${targetName ? ' ' + targetName : ''}`;
+
+      const singleUse = auto.attributes?.single_use;
+      const repeatText = singleUse ? '单次' : '每天';
+      return `${repeatText} ${timeStr}, ${actionText}${targetName ? ' ' + targetName : ''}`;
     }
     if (t.platform === 'time_pattern') {
       return `定时, ${actionText}`;
     }
     return '定时触发';
+  }
+
+  _formatDelay(delay) {
+    if (typeof delay === 'number') return `${delay}秒`;
+    if (typeof delay === 'string') {
+      const parts = delay.split(':');
+      if (parts.length === 3) {
+        const h = parseInt(parts[0]);
+        const m = parseInt(parts[1]);
+        const s = parseInt(parts[2]);
+        if (h > 0) return `${h}小时${m > 0 ? m + '分' : ''}`;
+        if (m > 0) return `${m}分钟${s > 0 ? s + '秒' : ''}`;
+        return `${s}秒`;
+      }
+      return delay;
+    }
+    return '';
   }
 
   _openDialog() {
@@ -317,13 +350,14 @@ class TimerEditorCard extends HTMLElement {
     const actions = this._getActions(auto);
     const action = actions[0] || {};
 
+    const isCountdown = triggers.length === 0;
+
     let timeStr = '';
     if (typeof trigger.at === 'string') {
       timeStr = trigger.at;
     }
     const [h, m] = timeStr.split(':').map(Number);
 
-    // Check for weekday conditions
     const conditions = this._getConditions(auto);
     const weekdayCond = conditions.find(c => c.condition === 'time' && c.weekday);
     let repeat = 'once';
@@ -342,13 +376,42 @@ class TimerEditorCard extends HTMLElement {
       }
     }
 
+    // Detect countdown mode
+    let countdownMin = 30;
+    if (isCountdown) {
+      const delayAction = actions.find(a => a.delay || (typeof a === 'object' && a.delay !== undefined));
+      if (delayAction) {
+        const delay = delayAction.delay;
+        if (typeof delay === 'string') {
+          const parts = delay.split(':');
+          if (parts.length === 3) {
+            countdownMin = parseInt(parts[0]) * 60 + parseInt(parts[1]);
+          }
+        } else if (typeof delay === 'number') {
+          countdownMin = Math.round(delay / 60);
+        }
+      }
+    }
+
+    // Detect condition
+    let condition = 'none';
+    const sunCond = conditions.find(c => c.condition === 'state' && c.entity_id === 'sun.sun');
+    if (sunCond) {
+      if (sunCond.state === 'below_horizon') condition = 'night';
+      if (sunCond.state === 'above_horizon') condition = 'day';
+    }
+
     this._formData = {
-      entity_id: action.entity_id || action.target?.entity_id || '',
+      entity_id: action.target?.entity_id || action.entity_id || '',
       display_name: attrs.friendly_name || '',
-      action: action.service === 'homeassistant.turn_on' ? 'turn_on' : 'turn_off',
+      action: action.service === 'homeassistant.turn_on' ? 'turn_on' : action.service === 'homeassistant.toggle' ? 'toggle' : 'turn_off',
       repeat: repeat,
       hour: h || 19,
       minute: m || 30,
+      mode: isCountdown ? 'countdown' : 'timer',
+      countdown_minutes: countdownMin || 30,
+      condition: condition,
+      single_use: !!attrs.single_use,
       automation_name: attrs.friendly_name || '',
       custom_text: attrs.timer_custom_text || '',
     };
@@ -364,6 +427,10 @@ class TimerEditorCard extends HTMLElement {
       repeat: 'once',
       hour: 19,
       minute: 30,
+      mode: 'timer',
+      countdown_minutes: 30,
+      condition: 'none',
+      single_use: false,
       automation_name: '',
       custom_text: '',
     };
@@ -426,6 +493,18 @@ class TimerEditorCard extends HTMLElement {
       }
       .timer-row { display: flex; gap: 12px; }
       .timer-row > * { flex: 1; }
+      .timer-mode-tab {
+        flex: 1; text-align: center; padding: 10px;
+        border-radius: 10px; cursor: pointer; font-size: 14px; font-weight: 500;
+        transition: all 0.2s;
+      }
+      .timer-mode-tab.active {
+        background: linear-gradient(135deg, #f59e0b, #f97316);
+        color: white;
+      }
+      .timer-mode-tab:not(.active) {
+        background: #f5f5f5; color: #666;
+      }
     `;
     document.head.appendChild(style);
 
@@ -440,10 +519,12 @@ class TimerEditorCard extends HTMLElement {
 
     this._bindDialogEvents(container);
     this._updateAutoName();
+    this._updateModeUI(container);
   }
 
   _buildDialogHTML() {
     const isEdit = !!this._editingEntityId;
+    const isTimer = this._formData.mode === 'timer';
 
     return `
       <div style="padding: 20px 24px 16px; display: flex; align-items: center; gap: 10px; border-bottom: 1px solid #f0f0f0;">
@@ -451,7 +532,7 @@ class TimerEditorCard extends HTMLElement {
           <ha-icon icon="mdi:clock-outline"></ha-icon>
         </div>
         <div style="flex: 1; font-size: 17px; font-weight: 600; color: #1a1a1a;">
-          ${isEdit ? '编辑定时任务' : '定时编辑 — 添加任务'}
+          ${isEdit ? '编辑任务' : '添加任务'}
         </div>
         <div style="cursor: pointer; color: #999; padding: 4px; border-radius: 8px;" id="timer-close-btn">
           <ha-icon icon="mdi:close" style="font-size: 20px;"></ha-icon>
@@ -459,21 +540,26 @@ class TimerEditorCard extends HTMLElement {
       </div>
 
       <div style="padding: 20px 24px;">
+        ${!isEdit ? `
         <div class="timer-form-group">
-          <div style="display: flex; align-items: center; gap: 8px; padding: 12px 14px;
-                      border: 1px solid #e0e0e0; border-radius: 12px; cursor: pointer;"
-               id="timer-entity-selector">
-            <ha-icon icon="mdi:power-socket" style="color: #666; font-size: 20px;"></ha-icon>
-            <div style="flex: 1;">
-              <div style="font-size: 15px; font-weight: 500; color: #333;" id="timer-entity-name">选择设备</div>
-              <div style="font-size: 12px; color: #999;" id="timer-entity-area">点击选择要控制的设备</div>
+          <div class="timer-row" style="margin-bottom: 4px;">
+            <div class="timer-mode-tab ${isTimer ? 'active' : ''}" data-mode="timer" id="timer-mode-timer">
+              <ha-icon icon="mdi:alarm" style="font-size: 16px; vertical-align: middle; margin-right: 4px;"></ha-icon>定时
             </div>
-            <ha-icon icon="mdi:chevron-down" style="color: #bbb;"></ha-icon>
+            <div class="timer-mode-tab ${!isTimer ? 'active' : ''}" data-mode="countdown" id="timer-mode-countdown">
+              <ha-icon icon="mdi:timer-outline" style="font-size: 16px; vertical-align: middle; margin-right: 4px;"></ha-icon>倒计时
+            </div>
           </div>
+        </div>
+        ` : ''}
+
+        <div class="timer-form-group">
+          <div class="timer-form-label">选择设备</div>
+          <div id="timer-entity-picker-wrap" style="width: 100%;"></div>
         </div>
 
         <div class="timer-form-group">
-          <div class="timer-form-label">主实体名称</div>
+          <div class="timer-form-label">任务名称</div>
           <input type="text" class="timer-form-input" id="timer-display-name"
                  placeholder="输入任务名称" value="${this._escapeHtml(this._formData.display_name)}">
         </div>
@@ -484,29 +570,60 @@ class TimerEditorCard extends HTMLElement {
             <select class="timer-form-select" id="timer-action">
               <option value="turn_off" ${this._formData.action === 'turn_off' ? 'selected' : ''}>关闭</option>
               <option value="turn_on" ${this._formData.action === 'turn_on' ? 'selected' : ''}>开启</option>
+              <option value="toggle" ${this._formData.action === 'toggle' ? 'selected' : ''}>切换</option>
             </select>
           </div>
           <div class="timer-form-group">
-            <div class="timer-form-label">重复周期</div>
-            <select class="timer-form-select" id="timer-repeat">
-              <option value="once" ${this._formData.repeat === 'once' ? 'selected' : ''}>单次</option>
-              <option value="daily" ${this._formData.repeat === 'daily' ? 'selected' : ''}>每天</option>
-              <option value="weekdays" ${this._formData.repeat === 'weekdays' ? 'selected' : ''}>工作日</option>
-              <option value="weekends" ${this._formData.repeat === 'weekends' ? 'selected' : ''}>周末</option>
+            <div class="timer-form-label">执行条件</div>
+            <select class="timer-form-select" id="timer-condition">
+              <option value="none" ${this._formData.condition === 'none' ? 'selected' : ''}>无条件</option>
+              <option value="night" ${this._formData.condition === 'night' ? 'selected' : ''}>仅夜间</option>
+              <option value="day" ${this._formData.condition === 'day' ? 'selected' : ''}>仅白天</option>
             </select>
           </div>
         </div>
 
-        <div class="timer-row">
-          <div class="timer-form-group">
-            <div class="timer-form-label">小时 (0-23)</div>
-            <input type="number" class="timer-form-input" id="timer-hour" min="0" max="23"
-                   value="${this._formData.hour}">
+        <div id="timer-timer-section" style="${isTimer ? '' : 'display: none;'}">
+          <div class="timer-row">
+            <div class="timer-form-group">
+              <div class="timer-form-label">重复周期</div>
+              <select class="timer-form-select" id="timer-repeat">
+                <option value="once" ${this._formData.repeat === 'once' ? 'selected' : ''}>单次</option>
+                <option value="daily" ${this._formData.repeat === 'daily' ? 'selected' : ''}>每天</option>
+                <option value="weekdays" ${this._formData.repeat === 'weekdays' ? 'selected' : ''}>工作日</option>
+                <option value="weekends" ${this._formData.repeat === 'weekends' ? 'selected' : ''}>周末</option>
+              </select>
+            </div>
+            <div class="timer-form-group" style="display: flex; align-items: center; padding-top: 24px;">
+              <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 14px; color: #555;">
+                <input type="checkbox" id="timer-single-use" ${this._formData.single_use ? 'checked' : ''}>
+                执行后自动停用
+              </label>
+            </div>
           </div>
+
+          <div class="timer-row">
+            <div class="timer-form-group">
+              <div class="timer-form-label">小时 (0-23)</div>
+              <input type="number" class="timer-form-input" id="timer-hour" min="0" max="23"
+                     value="${this._formData.hour}">
+            </div>
+            <div class="timer-form-group">
+              <div class="timer-form-label">分钟 (0-59)</div>
+              <input type="number" class="timer-form-input" id="timer-minute" min="0" max="59"
+                     value="${this._formData.minute}">
+            </div>
+          </div>
+        </div>
+
+        <div id="timer-countdown-section" style="${!isTimer ? '' : 'display: none;'}">
           <div class="timer-form-group">
-            <div class="timer-form-label">分钟 (0-59)</div>
-            <input type="number" class="timer-form-input" id="timer-minute" min="0" max="59"
-                   value="${this._formData.minute}">
+            <div class="timer-form-label">延迟时间（分钟）</div>
+            <input type="number" class="timer-form-input" id="timer-countdown-minutes" min="1" max="1440"
+                   value="${this._formData.countdown_minutes}">
+          </div>
+          <div style="font-size: 12px; color: #888; margin-top: -10px; margin-bottom: 12px;">
+            保存后立即启动倒计时，时间到后自动执行动作
           </div>
         </div>
 
@@ -542,7 +659,7 @@ class TimerEditorCard extends HTMLElement {
           color: #fff; font-size: 15px; font-weight: 600;
           cursor: pointer; transition: all 0.2s;
           box-shadow: 0 4px 12px rgba(245,158,11,0.3);
-        ">保存</button>
+        ">${isTimer ? '保存定时' : '启动倒计时'}</button>
       </div>
     `;
   }
@@ -551,9 +668,18 @@ class TimerEditorCard extends HTMLElement {
     container.querySelector('#timer-close-btn')?.addEventListener('click', () => this._closeDialog());
     container.querySelector('#timer-cancel-btn')?.addEventListener('click', () => this._closeDialog());
 
-    container.querySelector('#timer-entity-selector')?.addEventListener('click', () => {
-      this._showEntityPicker();
+    // Mode tabs
+    container.querySelector('#timer-mode-timer')?.addEventListener('click', () => {
+      this._formData.mode = 'timer';
+      this._updateModeUI(container);
     });
+    container.querySelector('#timer-mode-countdown')?.addEventListener('click', () => {
+      this._formData.mode = 'countdown';
+      this._updateModeUI(container);
+    });
+
+    // Entity picker
+    this._renderEntityPicker(container);
 
     container.querySelector('#timer-save-btn')?.addEventListener('click', () => this._saveAutomation());
     container.querySelector('#timer-delete-btn')?.addEventListener('click', () => this._deleteAutomation());
@@ -563,6 +689,7 @@ class TimerEditorCard extends HTMLElement {
     displayNameInput?.addEventListener('input', () => this._updateAutoName());
     actionSelect?.addEventListener('change', () => this._updateAutoName());
 
+    // Restore entity display if editing
     if (this._formData.entity_id && this._hass) {
       const state = this._hass.states[this._formData.entity_id];
       if (state) {
@@ -571,95 +698,77 @@ class TimerEditorCard extends HTMLElement {
     }
   }
 
-  _showEntityPicker() {
-    if (!this._hass) return;
+  _renderEntityPicker(container) {
+    const wrap = container.querySelector('#timer-entity-picker-wrap');
+    if (!wrap || !this._hass) return;
 
-    const entities = Object.keys(this._hass.states)
-      .filter(eid => eid.startsWith('switch.') || eid.startsWith('light.') || eid.startsWith('fan.') || eid.startsWith('climate.') || eid.startsWith('input_boolean.'));
-
-    const overlay = document.createElement('div');
-    overlay.style.cssText = `
-      position: fixed; top: 0; left: 0; right: 0; bottom: 0;
-      background: rgba(0,0,0,0.6); z-index: 10000;
-      display: flex; align-items: center; justify-content: center;
-      padding: 16px; backdrop-filter: blur(4px);
-    `;
-
-    const box = document.createElement('div');
-    box.style.cssText = `
-      background: #ffffff; border-radius: 16px; width: 100%; max-width: 420px;
-      max-height: 80vh; overflow-y: auto; box-shadow: 0 20px 60px rgba(0,0,0,0.2);
-    `;
-
-    box.innerHTML = `
-      <div style="padding: 16px 20px; border-bottom: 1px solid #f0f0f0; display: flex; align-items: center; justify-content: space-between;">
-        <span style="font-size: 17px; font-weight: 600; color: #1a1a1a;">选择设备</span>
-        <span id="picker-close" style="cursor: pointer; color: #999; font-size: 20px;"><ha-icon icon="mdi:close"></ha-icon></span>
-      </div>
-      <div id="picker-list" style="padding: 8px;"></div>
-    `;
-
-    overlay.appendChild(box);
-    this._dialog.appendChild(overlay);
-
-    overlay.addEventListener('click', (e) => {
-      if (e.target === overlay) overlay.remove();
-    });
-    box.querySelector('#picker-close').addEventListener('click', () => overlay.remove());
-
-    const listEl = box.querySelector('#picker-list');
-    entities.forEach(eid => {
-      const s = this._hass.states[eid];
-      const name = s.attributes?.friendly_name || eid;
-      const domain = eid.split('.')[0];
-      const icon = { switch: 'mdi:power-socket', light: 'mdi:lightbulb', fan: 'mdi:fan', climate: 'mdi:thermometer', input_boolean: 'mdi:toggle-switch' }[domain] || 'mdi:devices';
-      const isOn = s.state === 'on';
-
-      const item = document.createElement('div');
-      item.style.cssText = `
-        display: flex; align-items: center; padding: 12px 14px; margin-bottom: 6px;
-        border-radius: 12px; cursor: pointer; transition: background 0.15s;
-        background: ${isOn ? 'rgba(34,197,94,0.08)' : '#f8f8f8'};
-      `;
-      item.addEventListener('mouseenter', () => item.style.background = '#f0f0f0');
-      item.addEventListener('mouseleave', () => item.style.background = isOn ? 'rgba(34,197,94,0.08)' : '#f8f8f8');
-
-      item.innerHTML = `
-        <div style="width: 36px; height: 36px; border-radius: 10px; background: ${isOn ? 'linear-gradient(135deg, #22c55e, #16a34a)' : 'linear-gradient(135deg, #9ca3af, #6b7280)'}; display: flex; align-items: center; justify-content: center; color: white; margin-right: 12px; flex-shrink: 0;">
-          <ha-icon icon="${icon}" style="font-size: 18px;"></ha-icon>
-        </div>
-        <div style="flex: 1; min-width: 0;">
-          <div style="font-size: 15px; font-weight: 500; color: #333; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${name}</div>
-          <div style="font-size: 12px; color: #999; margin-top: 2px;">${eid}</div>
-        </div>
-      `;
-
-      item.addEventListener('click', () => {
-        this._formData.entity_id = eid;
-        this._updateEntityDisplay(s);
-        this._updateAutoName();
-        overlay.remove();
+    // Try to use HA native entity picker
+    const picker = document.createElement('ha-entity-picker');
+    if (picker) {
+      picker.hass = this._hass;
+      picker.value = this._formData.entity_id || '';
+      picker.label = '选择设备';
+      picker.allowCustomEntity = false;
+      picker.includeDomains = ['switch', 'light', 'fan', 'climate', 'cover', 'script', 'scene', 'input_boolean'];
+      picker.addEventListener('value-changed', (e) => {
+        this._formData.entity_id = e.detail.value;
+        if (this._hass && this._formData.entity_id) {
+          const state = this._hass.states[this._formData.entity_id];
+          if (state) this._updateAutoName();
+        }
       });
-
-      listEl.appendChild(item);
-    });
-
-    if (entities.length === 0) {
-      listEl.innerHTML = '<div style="text-align: center; padding: 40px; color: #999;">没有找到可控设备</div>';
+      wrap.innerHTML = '';
+      wrap.appendChild(picker);
+      return;
     }
+
+    // Fallback to simple select
+    const select = document.createElement('select');
+    select.className = 'timer-form-select';
+    select.id = 'timer-entity-id-native';
+    const entities = Object.keys(this._hass.states)
+      .filter(eid => eid.startsWith('switch.') || eid.startsWith('light.') || eid.startsWith('fan.') || eid.startsWith('climate.') || eid.startsWith('cover.') || eid.startsWith('script.') || eid.startsWith('scene.') || eid.startsWith('input_boolean.'));
+    select.innerHTML = '<option value="">请选择设备</option>' +
+      entities.map(eid => {
+        const s = this._hass.states[eid];
+        const name = s?.attributes?.friendly_name || eid;
+        const selected = eid === this._formData.entity_id ? 'selected' : '';
+        return `<option value="${eid}" ${selected}>${name} (${eid})</option>`;
+      }).join('');
+    select.addEventListener('change', (e) => {
+      this._formData.entity_id = e.target.value;
+      this._updateAutoName();
+    });
+    wrap.innerHTML = '';
+    wrap.appendChild(select);
   }
 
-  _updateEntityDisplay(state) {
-    const nameEl = this._dialog?.querySelector('#timer-entity-name');
-    const areaEl = this._dialog?.querySelector('#timer-entity-area');
-    if (nameEl) nameEl.textContent = state.attributes?.friendly_name || state.entity_id;
-    if (areaEl) areaEl.textContent = state.entity_id;
+  _updateModeUI(container) {
+    const timerSection = container.querySelector('#timer-timer-section');
+    const countdownSection = container.querySelector('#timer-countdown-section');
+    const saveBtn = container.querySelector('#timer-save-btn');
+    const timerTab = container.querySelector('#timer-mode-timer');
+    const countdownTab = container.querySelector('#timer-mode-countdown');
+
+    if (this._formData.mode === 'timer') {
+      if (timerSection) timerSection.style.display = '';
+      if (countdownSection) countdownSection.style.display = 'none';
+      if (saveBtn) saveBtn.textContent = this._editingEntityId ? '保存定时' : '保存定时';
+      if (timerTab) timerTab.classList.add('active');
+      if (countdownTab) countdownTab.classList.remove('active');
+    } else {
+      if (timerSection) timerSection.style.display = 'none';
+      if (countdownSection) countdownSection.style.display = '';
+      if (saveBtn) saveBtn.textContent = this._editingEntityId ? '保存倒计时' : '启动倒计时';
+      if (timerTab) timerTab.classList.remove('active');
+      if (countdownTab) countdownTab.classList.add('active');
+    }
   }
 
   _updateAutoName() {
     const displayName = this._dialog?.querySelector('#timer-display-name')?.value || '';
     const action = this._dialog?.querySelector('#timer-action')?.value || 'turn_off';
-    const actionText = { turn_on: '开启', turn_off: '关闭' }[action] || '执行';
+    const actionText = { turn_on: '开启', turn_off: '关闭', toggle: '切换' }[action] || '执行';
 
     if (!displayName) return;
 
@@ -676,6 +785,10 @@ class TimerEditorCard extends HTMLElement {
     }
   }
 
+  _updateEntityDisplay(state) {
+    // No-op for native picker
+  }
+
   _generateEntityId() {
     const name = this._formData.display_name || 'timer_task';
     return this._pinyin(name);
@@ -686,6 +799,7 @@ class TimerEditorCard extends HTMLElement {
       '定': 'ding', '时': 'shi', '关': 'guan', '开': 'kai', '充': 'chong',
       '电': 'dian', '器': 'qi', '灯': 'deng', '空': 'kong', '调': 'tiao',
       '窗': 'chuang', '帘': 'lian', '插': 'cha', '座': 'zuo', '扇': 'shan',
+      '倒': 'dao', '计': 'ji', '分': 'fen', '秒': 'miao', '钟': 'zhong',
     };
     let result = '';
     for (const char of str) {
@@ -703,9 +817,8 @@ class TimerEditorCard extends HTMLElement {
     const entityId = this._formData.entity_id;
     const displayName = dialog?.querySelector('#timer-display-name')?.value || '';
     const action = dialog?.querySelector('#timer-action')?.value || 'turn_off';
-    const repeat = dialog?.querySelector('#timer-repeat')?.value || 'once';
-    const hour = parseInt(dialog?.querySelector('#timer-hour')?.value || '0');
-    const minute = parseInt(dialog?.querySelector('#timer-minute')?.value || '0');
+    const condition = dialog?.querySelector('#timer-condition')?.value || 'none';
+    const mode = this._formData.mode;
     const autoName = dialog?.querySelector('#timer-auto-name')?.value || displayName;
 
     if (!entityId) {
@@ -713,7 +826,6 @@ class TimerEditorCard extends HTMLElement {
       return;
     }
 
-    // Show loading state on button
     const saveBtn = dialog?.querySelector('#timer-save-btn');
     if (saveBtn) {
       saveBtn.textContent = '保存中...';
@@ -721,47 +833,100 @@ class TimerEditorCard extends HTMLElement {
       saveBtn.disabled = true;
     }
 
-    const timeStr = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
-
-    const trigger = {
-      platform: 'time',
-      at: timeStr,
-    };
-
-    let conditions = [];
-    if (repeat === 'weekdays') {
-      conditions.push({
-        condition: 'time',
-        weekday: ['mon', 'tue', 'wed', 'thu', 'fri'],
-      });
-    } else if (repeat === 'weekends') {
-      conditions.push({
-        condition: 'time',
-        weekday: ['sat', 'sun'],
-      });
-    }
-
     const serviceMap = {
       turn_on: 'homeassistant.turn_on',
       turn_off: 'homeassistant.turn_off',
+      toggle: 'homeassistant.toggle',
     };
 
-    const automationConfig = {
-      alias: autoName || displayName,
-      description: `定时${action === 'turn_on' ? '开启' : '关闭'} ${displayName}`,
-      trigger: [trigger],
-      condition: conditions.length > 0 ? conditions : [],
-      action: [{
+    let automationConfig = {};
+
+    if (mode === 'timer') {
+      const repeat = dialog?.querySelector('#timer-repeat')?.value || 'once';
+      const hour = parseInt(dialog?.querySelector('#timer-hour')?.value || '0');
+      const minute = parseInt(dialog?.querySelector('#timer-minute')?.value || '0');
+      const singleUse = dialog?.querySelector('#timer-single-use')?.checked || false;
+      const timeStr = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+
+      const trigger = {
+        platform: 'time',
+        at: timeStr,
+      };
+
+      let conditions = [];
+      if (repeat === 'weekdays') {
+        conditions.push({
+          condition: 'time',
+          weekday: ['mon', 'tue', 'wed', 'thu', 'fri'],
+        });
+      } else if (repeat === 'weekends') {
+        conditions.push({
+          condition: 'time',
+          weekday: ['sat', 'sun'],
+        });
+      }
+
+      if (condition === 'night') {
+        conditions.push({ condition: 'state', entity_id: 'sun.sun', state: 'below_horizon' });
+      } else if (condition === 'day') {
+        conditions.push({ condition: 'state', entity_id: 'sun.sun', state: 'above_horizon' });
+      }
+
+      const actionsList = [{
         service: serviceMap[action] || 'homeassistant.turn_off',
         target: { entity_id: entityId },
-      }],
-      mode: 'single',
-    };
+      }];
+
+      if (singleUse) {
+        actionsList.push({
+          service: 'automation.turn_off',
+          target: { entity_id: '{{ this.entity_id }}' },
+        });
+      }
+
+      automationConfig = {
+        alias: autoName || displayName,
+        description: `定时${action === 'turn_on' ? '开启' : action === 'toggle' ? '切换' : '关闭'} ${displayName}`,
+        trigger: [trigger],
+        condition: conditions.length > 0 ? conditions : [],
+        action: actionsList,
+        mode: 'single',
+      };
+
+      if (singleUse) {
+        automationConfig.variables = { single_use: true };
+      }
+    } else {
+      // Countdown mode
+      const countdownMinutes = parseInt(dialog?.querySelector('#timer-countdown-minutes')?.value || '30');
+      const delayStr = `${String(Math.floor(countdownMinutes / 60)).padStart(2, '0')}:${String(countdownMinutes % 60).padStart(2, '0')}:00`;
+
+      let conditions = [];
+      if (condition === 'night') {
+        conditions.push({ condition: 'state', entity_id: 'sun.sun', state: 'below_horizon' });
+      } else if (condition === 'day') {
+        conditions.push({ condition: 'state', entity_id: 'sun.sun', state: 'above_horizon' });
+      }
+
+      automationConfig = {
+        alias: autoName || displayName,
+        description: `倒计时${countdownMinutes}分钟后${action === 'turn_on' ? '开启' : action === 'toggle' ? '切换' : '关闭'} ${displayName}`,
+        trigger: [],
+        condition: conditions.length > 0 ? conditions : [],
+        action: [
+          { delay: delayStr },
+          {
+            service: serviceMap[action] || 'homeassistant.turn_off',
+            target: { entity_id: entityId },
+          }
+        ],
+        mode: 'single',
+      };
+    }
 
     const yamlText = this._toYaml(automationConfig);
 
-    // Helper: fetch with timeout
-    const fetchWithTimeout = (url, options, timeout = 3000) => {
+    const fetchWithTimeout = (url, options, timeout = 5000) => {
       return Promise.race([
         fetch(url, options),
         new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), timeout))
@@ -772,13 +937,13 @@ class TimerEditorCard extends HTMLElement {
       const autoId = this._editingEntityId ? this._editingEntityId.replace('automation.', '') : 'timer_' + Date.now().toString(36).slice(-6);
       let saved = false;
 
-      // Method 1: fetchWithAuth with timeout
+      // Method 1: fetchWithAuth
       if (this._hass.fetchWithAuth) {
         try {
           const resp = await fetchWithTimeout(
             `/api/config/automation/config/${autoId}`,
             { method: 'POST', body: JSON.stringify(automationConfig) },
-            3000
+            5000
           );
           if (resp.ok) saved = true;
         } catch (e) {
@@ -786,7 +951,7 @@ class TimerEditorCard extends HTMLElement {
         }
       }
 
-      // Method 2: standard fetch with token and timeout
+      // Method 2: standard fetch with token
       if (!saved) {
         const token = this._hass.auth?.accessToken || this._hass.auth?.data?.access_token;
         if (token) {
@@ -801,7 +966,7 @@ class TimerEditorCard extends HTMLElement {
                 },
                 body: JSON.stringify(automationConfig),
               },
-              3000
+              5000
             );
             if (resp.ok) saved = true;
           } catch (e) {
@@ -811,13 +976,24 @@ class TimerEditorCard extends HTMLElement {
       }
 
       if (saved) {
+        // For countdown mode, trigger immediately
+        if (mode === 'countdown') {
+          try {
+            await this._hass.callService('automation', 'trigger', {
+              entity_id: `automation.${autoId}`,
+              skip_condition: false,
+            });
+          } catch (e) {
+            console.log('Auto-trigger countdown failed:', e);
+          }
+        }
+
         this._hass.callService('automation', 'reload');
         this._closeDialog();
         this._renderAutomationList();
         return;
       }
 
-      // Fallback: show YAML copy dialog
       this._showYamlDialog(yamlText, autoName);
 
     } catch (err) {
@@ -825,7 +1001,7 @@ class TimerEditorCard extends HTMLElement {
       this._showYamlDialog(yamlText, autoName);
     } finally {
       if (saveBtn) {
-        saveBtn.textContent = '保存';
+        saveBtn.textContent = mode === 'timer' ? '保存定时' : '启动倒计时';
         saveBtn.style.opacity = '1';
         saveBtn.disabled = false;
       }
@@ -833,21 +1009,45 @@ class TimerEditorCard extends HTMLElement {
   }
 
   _toYaml(config) {
-    // Simple YAML generator
     let yaml = `- id: "${Date.now().toString().slice(-8)}"\n`;
     yaml += `  alias: "${config.alias}"\n`;
     yaml += `  description: "${config.description}"\n`;
     yaml += `  trigger:\n`;
-    config.trigger.forEach(t => {
-      yaml += `    - platform: ${t.platform}\n`;
-      yaml += `      at: "${t.at}"\n`;
-    });
-    yaml += `  condition: []\n`;
+    if (config.trigger && config.trigger.length > 0) {
+      config.trigger.forEach(t => {
+        yaml += `    - platform: ${t.platform}\n`;
+        if (t.at) yaml += `      at: "${t.at}"\n`;
+      });
+    } else {
+      yaml += `    []\n`;
+    }
+    yaml += `  condition:\n`;
+    if (config.condition && config.condition.length > 0) {
+      config.condition.forEach(c => {
+        if (c.condition === 'time' && c.weekday) {
+          yaml += `    - condition: time\n`;
+          yaml += `      weekday:\n`;
+          c.weekday.forEach(d => yaml += `        - ${d}\n`);
+        } else if (c.condition === 'state') {
+          yaml += `    - condition: state\n`;
+          yaml += `      entity_id: ${c.entity_id}\n`;
+          yaml += `      state: ${c.state}\n`;
+        }
+      });
+    } else {
+      yaml += `    []\n`;
+    }
     yaml += `  action:\n`;
     config.action.forEach(a => {
-      yaml += `    - service: ${a.service}\n`;
-      yaml += `      target:\n`;
-      yaml += `        entity_id: ${a.target.entity_id}\n`;
+      if (a.delay) {
+        yaml += `    - delay: "${a.delay}"\n`;
+      } else if (a.service) {
+        yaml += `    - service: ${a.service}\n`;
+        if (a.target?.entity_id) {
+          yaml += `      target:\n`;
+          yaml += `        entity_id: ${a.target.entity_id}\n`;
+        }
+      }
     });
     yaml += `  mode: single\n`;
     return yaml;
@@ -877,7 +1077,12 @@ class TimerEditorCard extends HTMLElement {
         <textarea id="yaml-output" readonly style="width: 100%; height: 200px; border: 1px solid #e0e0e0; border-radius: 10px; padding: 12px; font-family: monospace; font-size: 13px; resize: none; background: #f8f8f8;">${this._escapeHtml(yamlText)}</textarea>
         <button id="yaml-copy" style="width: 100%; margin-top: 12px; padding: 12px; border-radius: 12px; border: none; background: linear-gradient(135deg, #f59e0b, #f97316); color: #fff; font-size: 15px; font-weight: 600; cursor: pointer;">复制 YAML</button>
         <div style="font-size: 12px; color: #888; margin-top: 12px; line-height: 1.5;">
-          复制后粘贴到 <b>automations.yaml</b> 文件中，然后重启 HA
+          <b>恢复模式修复提示：</b><br>
+          如果 HA 进入恢复模式，请检查：<br>
+          1. configuration.yaml 的缩进是否正确<br>
+          2. automations.yaml 是否有语法错误<br>
+          3. themes/*.yaml 是否引入了无效字符<br>
+          4. 查看设置 → 系统 → 日志 获取详细错误
         </div>
       </div>
       <div style="padding: 0 16px 16px;">
@@ -901,15 +1106,38 @@ class TimerEditorCard extends HTMLElement {
     if (!this._editingEntityId || !this._hass) return;
     if (!confirm('确定要删除这个定时任务吗？')) return;
 
-    try {
-      await this._hass.callService('automation', 'delete', {
-        entity_id: this._editingEntityId,
-      });
+    const autoId = this._editingEntityId.replace('automation.', '');
+    let deleted = false;
+
+    // Method 1: REST API DELETE
+    const token = this._hass.auth?.accessToken || this._hass.auth?.data?.access_token;
+    if (token) {
+      try {
+        const resp = await fetch(`/api/config/automation/config/${autoId}`, {
+          method: 'DELETE',
+          headers: { 'Authorization': `Bearer ${token}` },
+        });
+        if (resp.ok || resp.status === 404) deleted = true;
+      } catch (e) {
+        console.log('DELETE failed:', e);
+      }
+    }
+
+    if (!deleted && this._hass.fetchWithAuth) {
+      try {
+        const resp = await this._hass.fetchWithAuth(`/api/config/automation/config/${autoId}`, { method: 'DELETE' });
+        if (resp.ok || resp.status === 404) deleted = true;
+      } catch (e) {
+        console.log('fetchWithAuth DELETE failed:', e);
+      }
+    }
+
+    if (deleted) {
+      this._hass.callService('automation', 'reload');
       this._closeDialog();
       this._renderAutomationList();
-    } catch (err) {
-      console.error('Failed to delete:', err);
-      alert('删除失败');
+    } else {
+      alert('删除失败，请手动在 设置 > 自动化与场景 中删除');
     }
   }
 
@@ -928,7 +1156,7 @@ class TimerEditorCard extends HTMLElement {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
-    }
+  }
 
   getCardSize() {
     return 2;
@@ -943,12 +1171,12 @@ window.customCards = window.customCards || [];
 window.customCards.push({
   type: 'timer-editor-card',
   name: '定时编辑器',
-  description: '创建和管理定时自动化任务',
+  description: '创建和管理定时自动化任务（支持倒计时）',
   preview: false,
 });
 
 console.info(
-  '%c TIMER-EDITOR-CARD %c v1.3.1 ',
+  '%c TIMER-EDITOR-CARD %c v1.4.0 ',
   'color: white; background: #f59e0b; font-weight: 700;',
   'color: #f59e0b; background: #fff; font-weight: 700;'
 );
